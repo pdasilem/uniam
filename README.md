@@ -106,6 +106,13 @@ You have access to a persistent note storage system via the `uniam` MCP tools.
 - Call `uniam_context` to get recent notes for this project
 - If the request relates to a specific topic, also call `uniam_search` with relevant terms
 
+**During session — MANDATORY**: While working, periodically call `uniam_store` at meaningful checkpoints:
+- After architectural or design decisions
+- After identifying a root cause or important debugging finding
+- After discovering non-obvious constraints, patterns, or gotchas
+- After the user clarifies or changes a requirement
+- During long sessions where context could be lost if interrupted
+
 **Session end — MANDATORY**: After any task that involved changes, decisions, bugs, or learnings, call `uniam_store` with:
 - `title`: short descriptive title
 - `what`: what happened or was decided
@@ -114,7 +121,7 @@ You have access to a persistent note storage system via the `uniam` MCP tools.
 - `category`: one of `decision`, `pattern`, `bug`, `context`, `learning`
 - `details`: full context for a future agent with no prior knowledge
 
-Do not skip either step. Notes are how context survives across sessions.
+Do not skip any step. Retrieve at the start, store during meaningful checkpoints, and store again at the end. Notes are how context survives across sessions.
 ```
 
 ## Semantic search (optional)

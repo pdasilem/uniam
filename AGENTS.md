@@ -24,6 +24,20 @@ uniam retrieve <note-id>
 
 Do not skip this step. Prior sessions may contain decisions, bugs, and context that directly affect your current task.
 
+## During session — MANDATORY
+
+While working, periodically store the important things you learn or decide. Do not wait until the very end if the session already produced meaningful context.
+
+You MUST store notes during the session when any of these happen:
+
+- You make an architectural or design decision
+- You identify a root cause or important debugging finding
+- You discover a non-obvious pattern, constraint, or gotcha
+- The user clarifies or changes a requirement
+- The session is getting long and important context could be lost
+
+Store notes at meaningful checkpoints so the next agent can recover context even if the session is interrupted.
+
 ## Session end — MANDATORY
 
 Before ending your response to ANY task that involved making changes, debugging, deciding, or learning something, you MUST store a note. This is not optional. If you did meaningful work, store it.
@@ -69,7 +83,7 @@ You MUST store a note when any of these happen:
 
 ## Rules
 
-- Retrieve before working. Store before finishing. No exceptions.
+- Retrieve before working. Store during meaningful checkpoints. Store before finishing. No exceptions.
 - Always capture thorough details — write for a future agent with no context.
 - Never include API keys, secrets, or credentials.
 - Wrap sensitive values in `<redacted>` tags.
