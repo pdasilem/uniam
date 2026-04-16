@@ -10,6 +10,10 @@ import (
 	"uniam/internal/config"
 )
 
+func stringPtr(s string) *string {
+	return &s
+}
+
 // --- OllamaProvider tests ---
 
 func TestOllamaProvider_Embed_Success(t *testing.T) {
@@ -184,11 +188,10 @@ func TestNewProvider_OpenAI_RequiresAPIKey(t *testing.T) {
 }
 
 func TestNewProvider_OpenAI_WithAPIKey(t *testing.T) {
-	key := "sk-test"
 	cfg := config.EmbeddingConfig{
 		Provider: "openai",
 		Model:    "text-embedding-3-small",
-		APIKey:   &key,
+		APIKey:   stringPtr("sk-test"),
 	}
 
 	p, err := NewProvider(cfg)

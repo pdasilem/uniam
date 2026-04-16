@@ -8,6 +8,10 @@ import (
 	"uniam/internal/models"
 )
 
+func stringPtr(s string) *string {
+	return &s
+}
+
 // newTestDB creates a fresh in-memory-backed DB in a temp directory.
 func newTestDB(t *testing.T) *DB {
 	t.Helper()
@@ -208,9 +212,7 @@ func TestFTSSearch_ProjectFilter(t *testing.T) {
 		t.Fatalf("InsertItem() error = %v", err)
 	}
 
-	projA := "projectA"
-
-	results, err := d.FTSSearch("qwerty", 10, &projA, nil)
+	results, err := d.FTSSearch("qwerty", 10, stringPtr("projectA"), nil)
 	if err != nil {
 		t.Fatalf("FTSSearch() error = %v", err)
 	}
@@ -263,9 +265,7 @@ func TestUpdateItem_DetailsAppend(t *testing.T) {
 		t.Fatalf("InsertItem() error = %v", err)
 	}
 
-	appended := "new appended content"
-
-	err = d.UpdateItem(item.ID, nil, nil, nil, nil, &appended)
+	err = d.UpdateItem(item.ID, nil, nil, nil, nil, stringPtr("new appended content"))
 	if err != nil {
 		t.Fatalf("UpdateItem() error = %v", err)
 	}
@@ -435,9 +435,7 @@ func TestCountItems_ProjectFilter(t *testing.T) {
 		t.Fatalf("InsertItem() error = %v", err)
 	}
 
-	proj := "alpha"
-
-	count, err := d.CountItems(&proj, nil)
+	count, err := d.CountItems(stringPtr("alpha"), nil)
 	if err != nil {
 		t.Fatalf("CountItems() error = %v", err)
 	}

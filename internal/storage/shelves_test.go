@@ -8,6 +8,10 @@ import (
 	"uniam/internal/models"
 )
 
+func stringPtr(s string) *string {
+	return &s
+}
+
 func TestWriteNoteItem(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -27,9 +31,7 @@ func TestWriteNoteItem(t *testing.T) {
 		UpdatedAt:     "2026-01-01T00:00:00Z",
 	}
 
-	details := "Full details here"
-
-	filePath, err := WriteNoteItem(projectDir, item, "2026-01-01", &details)
+	filePath, err := WriteNoteItem(projectDir, item, "2026-01-01", stringPtr("Full details here"))
 	if err != nil {
 		t.Fatalf("WriteNoteItem() error = %v", err)
 	}

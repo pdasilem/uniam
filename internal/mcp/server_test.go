@@ -7,6 +7,10 @@ import (
 	"uniam/internal/models"
 )
 
+func stringPtr(s string) *string {
+	return &s
+}
+
 // --- Stub implementation of uniamService ---
 
 type stubService struct {
@@ -183,16 +187,14 @@ func TestHandleUniamSearch_NoResults(t *testing.T) {
 }
 
 func TestHandleUniamSearch_WithResults(t *testing.T) {
-	cat := "decision"
-	src := "claude"
 	svc := &stubService{
 		searchResults: []models.SearchResult{
 			{
 				ID:        "item-1",
 				Title:     "Some Decision",
 				What:      "We decided X",
-				Category:  &cat,
-				Source:    &src,
+				Category:  stringPtr("decision"),
+				Source:    stringPtr("claude"),
 				Tags:      []string{"arch"},
 				Project:   "myproject",
 				Score:     0.95,
