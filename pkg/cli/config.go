@@ -11,6 +11,10 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+func stringPtr(s string) *string {
+	return &s
+}
+
 var configInitForce bool
 
 var configCmd = &cobra.Command{
@@ -30,8 +34,7 @@ var configCmd = &cobra.Command{
 		// Redact API keys
 		cfgCopy := *cfg
 		if cfgCopy.Embedding.APIKey != nil {
-			redacted := "<redacted>"
-			cfgCopy.Embedding.APIKey = &redacted
+			cfgCopy.Embedding.APIKey = stringPtr("<redacted>")
 		}
 
 		data, err := yaml.Marshal(&cfgCopy)
