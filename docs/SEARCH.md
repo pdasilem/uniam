@@ -1,60 +1,146 @@
-# Search Configuration
+# Search And Optional MCP Integrations
 
-Uniam supports two main search functionalities for context retrieval: **Fast Context MCP Servers** for codebase search, and **Semantic Search** for vector-based AI note retrieval.
+Uniam supports keyword search out of the box, optional semantic search through embeddings, and optional MCP integrations that extend what an installed agent can search or inspect.
 
-## Fast Context MCP Servers (code-search-mcp & ripgrep)
+## Optional MCP integrations
 
-During setup (`uniam setup`), you will be prompted to install `ripgrep` and `code-search-mcp`. These provide powerful context retrieval plugins to your agent's configuration.
+During `uniam setup`, you can opt into any of these MCP servers. Each prompt defaults to `no`.
 
-### Prerequisites for `code-search-mcp`
+| MCP | What it adds |
+| --- | --- |
+| `ripgrep` | Exact text and regex search across code and config files |
+| `code-search` | Broader code discovery, symbol-oriented search, and cross-file navigation |
+| `Context7` | Up-to-date library docs, current package versions, and dependency compatibility |
+| `Git` | Structured repository status, diff, history, and branch inspection |
+| `Brave Search` | Web search for current external information |
 
-The `code-search-mcp` package is published to GitHub Packages and requires authentication to install. Before running setup:
+### CLI flags
 
-1. Navigate to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Generate a new token with the `read:packages` scope
-3. Create a `.npmrc` file in your home directory with your token:
-
-**macOS/Linux**:
+If you want to skip the interactive prompts, opt in explicitly:
 
 ```bash
-echo "@LLMTooling:registry=https://npm.pkg.github.com" > ~/.npmrc
-echo "//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN" >> ~/.npmrc
+uniam setup claude-code --ripgrep
+uniam setup claude-code --code-search
+uniam setup claude-code --context7
+uniam setup claude-code --git-mcp
+uniam setup claude-code --brave-search
 ```
 
-**Windows (PowerShell)**:
+These flags work with every supported agent setup target.
 
-```powershell
-Set-Content -Path $env:USERPROFILE\.npmrc -Value "@LLMTooling:registry=https://npm.pkg.github.com"
-Add-Content -Path $env:USERPROFILE\.npmrc -Value "//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN"
-```
+### Saved state and API keys
 
-### Security Note for `code-search-mcp`
+Uniam stores optional MCP state in `~/.uniam/config.yaml` under `integrations`.
 
-The `code-search` plugin provides powerful searching capabilities. By default, it searches all paths if allowed. It is highly recommended to configure it to restrict searches to specific working directories for security.
+- `Context7` reuses `integrations.context7_api_key`
+- `Brave Search` reuses `integrations.brave_search_api_key`
+- `code-search` reuses `integrations.code_search_path` after the first successful local install
 
-When you run `uniam setup`, it configures `code-search` with the `--allowed-workspace` flag set to your home directory (`~`) by default. You are encouraged to modify your agent's MCP settings file to point to specific project folders instead:
+If a saved key already exists, setup lets you press Enter to reuse it. If the key is empty and you do not provide one, that MCP is skipped for the current setup run.
+
+### ripgrep MCP
+
+`ripgrep` MCP is configured with:
 
 ```json
 {
-  "mcpServers": {
-    "code-search": {
-      "command": "node",
-      "args": [
-        "~/.local/share/uniam/code-search-mcp/dist/index.js",
-        "--allowed-workspace", "/path/to/your/project1",
-        "--allowed-workspace", "/path/to/your/project2"
-      ]
-    }
+  "command": "npx",
+  "args": ["-y", "mcp-ripgrep@latest"]
+}
+```
+
+It is best for:
+
+- exact identifiers
+- literals and config keys
+- log strings
+- regex-based narrowing
+
+It is not meant to replace broader architectural or symbol-oriented discovery.
+
+### code-search MCP
+
+Uniam installs `code-search-mcp` locally and reuses the built entrypoint on later setups. The resulting MCP server is configured with `--allowed-workspace` set to your home directory by default.
+
+It is best for:
+
+- broader code discovery
+- symbol relationships
+- cross-file navigation
+- concept-level exploration when you do not already know the exact string to search for
+
+If you want tighter boundaries, edit your agent MCP config and replace the default `--allowed-workspace` path with specific project roots.
+
+Example JSON shape:
+
+```json
+{
+  "command": "node",
+  "args": [
+    "/home/you/.local/share/uniam/code-search-mcp/dist/index.js",
+    "--allowed-workspace",
+    "/home/you/projects/example"
+  ]
+}
+```
+
+### Context7 MCP
+
+`Context7` is configured with:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "@upstash/context7-mcp"],
+  "env": {
+    "CONTEXT7_API_KEY": "..."
   }
 }
 ```
 
-| Option | Description |
-|---|---|
-| `--allowed-workspace <path>` | Whitelist a directory for search operations. Can be specified multiple times. If omitted, all paths are allowed (use with caution). |
-| `-w <path>` | Short alias for `--allowed-workspace`. |
+Use it when an agent needs:
 
-## Semantic search (optional)
+- current library or framework documentation
+- the latest package versions
+- dependency compatibility details
+
+### Git MCP
+
+Uniam configures the official Git MCP server through `uvx`:
+
+```json
+{
+  "command": "uvx",
+  "args": ["mcp-server-git"]
+}
+```
+
+This MCP helps when an agent should inspect:
+
+- repository status
+- staged or unstaged diffs
+- commit history
+- branches and tags
+
+Uniam skips Git MCP setup if `uvx` is not available in `PATH`.
+
+### Brave Search MCP
+
+`Brave Search` is configured with:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"],
+  "env": {
+    "BRAVE_API_KEY": "..."
+  }
+}
+```
+
+Use it when an agent needs current external information from the web.
+
+## Semantic search
 
 Keyword search (FTS5) works with no extra setup. To also enable semantic vector search, configure an embedding provider in `~/.uniam/config.yaml`:
 

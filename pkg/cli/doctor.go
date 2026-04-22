@@ -111,6 +111,35 @@ var doctorCmd = &cobra.Command{
 
 			pass("embedding provider", fmt.Sprintf("%s / %s @ %s", cfg.Embedding.Provider, cfg.Embedding.Model, baseURL))
 			pass("context.semantic", cfg.Context.Semantic)
+			if cfg.Integrations.RipgrepEnabled {
+				pass("ripgrep MCP", "enabled in Uniam config")
+			} else {
+				warn("ripgrep MCP", "not enabled in Uniam config")
+			}
+			if cfg.Integrations.CodeSearchEnabled {
+				detail := "enabled in Uniam config"
+				if cfg.Integrations.CodeSearchPath != nil && strings.TrimSpace(*cfg.Integrations.CodeSearchPath) != "" {
+					detail += " (" + strings.TrimSpace(*cfg.Integrations.CodeSearchPath) + ")"
+				}
+				pass("code-search MCP", detail)
+			} else {
+				warn("code-search MCP", "not enabled in Uniam config")
+			}
+			if cfg.Integrations.GitEnabled {
+				pass("Git MCP", "enabled in Uniam config")
+			} else {
+				warn("Git MCP", "not enabled in Uniam config")
+			}
+			if cfg.Integrations.Context7APIKey != nil && strings.TrimSpace(*cfg.Integrations.Context7APIKey) != "" {
+				pass("context7 api key", "configured in Uniam config")
+			} else {
+				warn("context7 api key", "not configured")
+			}
+			if cfg.Integrations.BraveSearchAPIKey != nil && strings.TrimSpace(*cfg.Integrations.BraveSearchAPIKey) != "" {
+				pass("brave api key", "configured in Uniam config")
+			} else {
+				warn("brave api key", "not configured")
+			}
 		}
 
 		svc, err := core.NewService(home)

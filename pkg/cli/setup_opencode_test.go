@@ -129,6 +129,62 @@ func TestUninstallOpenCodeRemovesOnlyUniamManagedAssets(t *testing.T) {
 	}
 }
 
+func TestSetupOpenCodeAddsContext7WhenEnabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	target := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+
+	configPath := filepath.Join(target, "opencode.json")
+	writeJSONFixture(t, configPath, map[string]any{})
+
+	prevOptions := currentSetupOptions
+	t.Cleanup(func() {
+		currentSetupOptions = prevOptions
+	})
+
+	currentSetupOptions = setupOptions{
+		Context7:       true,
+		Context7APIKey: "ctx7sk-test",
+	}
+
+	if _, err := setupOpenCode(false, false); err != nil {
+		t.Fatalf("setupOpenCode() error = %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	mcp, ok := decoded["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("config mcp type = %T, want map[string]any", decoded["mcp"])
+	}
+
+	context7, ok := mcp["context7"].(map[string]any)
+	if !ok {
+		t.Fatal("expected mcp.context7 to be configured")
+	}
+
+	env, ok := context7["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("context7 env type = %T, want map[string]any", context7["env"])
+	}
+
+	if got := env["CONTEXT7_API_KEY"]; got != "ctx7sk-test" {
+		t.Fatalf("CONTEXT7_API_KEY = %v, want %q", got, "ctx7sk-test")
+	}
+}
+
 func assertOpenCodeManagedFiles(t *testing.T, target string) {
 	t.Helper()
 

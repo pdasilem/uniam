@@ -105,7 +105,7 @@ The repository is therefore not just a CLI tool. It is a local memory platform w
 - `pkg/cli/setup_skill.go`
   - Embeds and installs skill files.
 - `pkg/cli/setup_codesearch.go`
-  - Installs optional fast-context tooling.
+  - Installs and reuses the optional `code-search` MCP server.
 
 ### Application layer
 
@@ -494,9 +494,12 @@ Responsibilities:
 
 - installs Uniam as an MCP server into different agent config formats
 - supports global and project-scoped installation depending on agent
-- optionally installs fast-context servers:
+- optionally installs additional MCP integrations:
   - `ripgrep`
   - `code-search`
+  - `Context7`
+  - `Git`
+  - `Brave Search`
 - installs embedded skill files for supported agents
 
 Supported targets in code:
@@ -631,4 +634,3 @@ Start here when navigating the repo:
 - `internal/mcp/server.go`
 - `pkg/cli/setup.go`
 - `internal/gormlite/sqlite.go`
-

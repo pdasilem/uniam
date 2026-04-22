@@ -31,11 +31,24 @@ type UpdatesConfig struct {
 	AutoApply          bool `yaml:"auto_apply"`
 }
 
+// IntegrationsConfig holds optional external integration settings.
+type IntegrationsConfig struct {
+	RipgrepEnabled     bool    `yaml:"ripgrep_enabled"`
+	CodeSearchEnabled  bool    `yaml:"code_search_enabled"`
+	CodeSearchPath     *string `yaml:"code_search_path"`
+	Context7Enabled    bool    `yaml:"context7_enabled"`
+	Context7APIKey     *string `yaml:"context7_api_key"`
+	GitEnabled         bool    `yaml:"git_enabled"`
+	BraveSearchEnabled bool    `yaml:"brave_search_enabled"`
+	BraveSearchAPIKey  *string `yaml:"brave_search_api_key"`
+}
+
 // Config holds the complete configuration.
 type Config struct {
-	Embedding EmbeddingConfig `yaml:"embedding"`
-	Context   ContextConfig   `yaml:"context"`
-	Updates   UpdatesConfig   `yaml:"updates"`
+	Embedding    EmbeddingConfig    `yaml:"embedding"`
+	Context      ContextConfig      `yaml:"context"`
+	Updates      UpdatesConfig      `yaml:"updates"`
+	Integrations IntegrationsConfig `yaml:"integrations"`
 }
 
 // GetUniamHome returns the uniam home directory.
@@ -207,6 +220,16 @@ updates:
   check_on_mcp_start: true
   check_interval_hours: 24
   auto_apply: false
+
+integrations:
+  ripgrep_enabled: false
+  code_search_enabled: false
+  # code_search_path: /home/you/.local/share/uniam/code-search-mcp/dist/index.js
+  context7_enabled: false
+  # context7_api_key: ctx7sk-... # optional; reused during agent setup when enabling Context7
+  git_enabled: false
+  brave_search_enabled: false
+  # brave_search_api_key: BSA... # optional; reused during agent setup when enabling Brave Search
 `
 }
 

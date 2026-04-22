@@ -39,7 +39,7 @@ Installs to `%LOCALAPPDATA%\Programs\uniam\` and adds it to your user `PATH` via
 
 ### Manual download
 
-1. Go to the [Releases](../../releases) page and download the binary for your platform:
+1. Go to the [Releases](https://github.com/pdasilem/uniam/releases) page and download the binary for your platform:
 
    | Platform | File |
    |----------|------|
@@ -70,15 +70,21 @@ uniam init
 uniam setup claude-code   # or: cursor, windsurf, antigravity, codex, opencode, roocode, copilot, gemini-cli
 ```
 
-By default, `setup` asks whether to also install optional **fast context MCP servers** (`ripgrep` and `code-search-mcp`).
+By default, `setup` asks whether to also install optional MCP servers for `ripgrep`, `code-search`, `Context7`, `Git`, and `Brave Search`.
 
 To skip the prompt and opt in explicitly, use:
 
 ```bash
-uniam setup claude-code --fast-context
+uniam setup claude-code --ripgrep
+uniam setup claude-code --code-search
+uniam setup claude-code --context7
+uniam setup claude-code --git-mcp
+uniam setup claude-code --brave-search
 ```
 
-`--fast-context` works with every supported agent setup target.
+These flags work with every supported agent setup target.
+
+When you enable `Context7` or `Brave Search`, Uniam reads the saved API key from `~/.uniam/config.yaml` if one is already present there. During setup, you can press Enter to reuse the saved key or enter a new one; new values are written back to the same Uniam config file so you do not need to re-enter the key for each agent.
 
 This writes the MCP server entry into your agent's config file. Restart the agent and uniam will be available as a tool.
 
@@ -109,7 +115,7 @@ Run `uniam setup` again at any time to re-apply the config — it is **idempoten
 
 Run `uniam doctor` to verify everything is working.
 
-> **Note**: If you want to configure your search parameters, set up custom search directories, or manage your GitHub PAT constraints, refer to the [Search Configuration Guide](docs/SEARCH.md).
+> **Note**: Optional MCP setup, search-oriented integrations, API key reuse, and code-search workspace guidance are documented in the [Search Configuration Guide](docs/SEARCH.md).
 
 ### Updating
 
@@ -241,6 +247,7 @@ Required workflow:
 - During long or decision-heavy work, checkpoint with `uniam_store`.
 - Before finishing meaningful work, store a final note with `uniam_store`.
 - Curate stale or repetitive memory with `uniam_archive`, `uniam_supersede`, `uniam_update_note`, and `uniam_compact`.
+- If Context7 is installed, use it to fetch up-to-date library and framework documentation, current package versions, and dependency compatibility details.
 
 Use `uniam_explain_search` when retrieval behavior needs debugging.
 

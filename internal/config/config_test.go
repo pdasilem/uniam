@@ -53,10 +53,23 @@ func TestSaveConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
+	context7Key := "ctx7sk-test"
+	braveKey := "brv-test"
+	codeSearchPath := "/tmp/code-search/dist/index.js"
 	cfg := &Config{
 		Embedding: EmbeddingConfig{
 			Provider: "ollama",
 			Model:    "test-model",
+		},
+		Integrations: IntegrationsConfig{
+			RipgrepEnabled:     true,
+			CodeSearchEnabled:  true,
+			CodeSearchPath:     &codeSearchPath,
+			Context7Enabled:    true,
+			Context7APIKey:     &context7Key,
+			GitEnabled:         true,
+			BraveSearchEnabled: true,
+			BraveSearchAPIKey:  &braveKey,
 		},
 	}
 
@@ -73,5 +86,37 @@ func TestSaveConfig(t *testing.T) {
 
 	if loaded.Embedding.Model != "test-model" {
 		t.Errorf("LoadConfig() Model = %q, want %q", loaded.Embedding.Model, "test-model")
+	}
+
+	if loaded.Integrations.Context7APIKey == nil || *loaded.Integrations.Context7APIKey != context7Key {
+		t.Errorf("LoadConfig() Context7APIKey = %v, want %q", loaded.Integrations.Context7APIKey, context7Key)
+	}
+
+	if !loaded.Integrations.RipgrepEnabled {
+		t.Error("LoadConfig() RipgrepEnabled = false, want true")
+	}
+
+	if !loaded.Integrations.CodeSearchEnabled {
+		t.Error("LoadConfig() CodeSearchEnabled = false, want true")
+	}
+
+	if loaded.Integrations.CodeSearchPath == nil || *loaded.Integrations.CodeSearchPath != codeSearchPath {
+		t.Errorf("LoadConfig() CodeSearchPath = %v, want %q", loaded.Integrations.CodeSearchPath, codeSearchPath)
+	}
+
+	if !loaded.Integrations.Context7Enabled {
+		t.Error("LoadConfig() Context7Enabled = false, want true")
+	}
+
+	if !loaded.Integrations.GitEnabled {
+		t.Error("LoadConfig() GitEnabled = false, want true")
+	}
+
+	if !loaded.Integrations.BraveSearchEnabled {
+		t.Error("LoadConfig() BraveSearchEnabled = false, want true")
+	}
+
+	if loaded.Integrations.BraveSearchAPIKey == nil || *loaded.Integrations.BraveSearchAPIKey != braveKey {
+		t.Errorf("LoadConfig() BraveSearchAPIKey = %v, want %q", loaded.Integrations.BraveSearchAPIKey, braveKey)
 	}
 }
