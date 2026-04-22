@@ -9,7 +9,7 @@ Local note storage for coding agents. Your agent keeps notes on decisions, bugs,
 
 ## Features
 
-- **Works with multiple agents** — Claude Code, Cursor, Windsurf, Antigravity, Codex, OpenCode, RooCode. One command sets up MCP config for your agent.
+- **Works with multiple agents** — Claude Code, Cursor, Windsurf, Antigravity, Codex, OpenCode, RooCode, GitHub Copilot, and Gemini CLI. One command sets up MCP config for your agent.
 - **MCP native** — Runs as an MCP server exposing project-scoped memory tools such as `uniam_context`, `uniam_search`, `uniam_retrieve`, `uniam_store`, `uniam_archive`, `uniam_supersede`, `uniam_update_note`, `uniam_compact`, and `uniam_explain_search`.
 - **Local-first** — Everything stays on your machine. Notes are stored as Markdown in `~/.uniam/shelves/`, readable in Obsidian or any editor.
 - **Zero idle cost** — No background processes, no daemon, no RAM overhead. The MCP server only runs when the agent starts it.
@@ -70,18 +70,40 @@ uniam init
 uniam setup claude-code   # or: cursor, windsurf, antigravity, codex, codex-cli, opencode, roocode, copilot, gemini-cli
 ```
 
-During setup (except for Windsurf and OpenCode), you will be prompted to install **fast context MCP servers** (`ripgrep` and `code-search-mcp`). Answering "yes" will also add these powerful context retrieval plugins to your agent's configuration.
+By default, `setup` asks whether to also install optional **fast context MCP servers** (`ripgrep` and `code-search-mcp`).
+
+To skip the prompt and opt in explicitly, use:
+
+```bash
+uniam setup claude-code --fast-context
+```
+
+`--fast-context` works with every supported agent setup target.
 
 This writes the MCP server entry into your agent's config file. Restart the agent and uniam will be available as a tool.
 
-For OpenCode, `uniam setup opencode` is global-only. It installs under `~/.config/opencode/` and sets up:
+If you want Uniam only for a specific repository, use project scope and run setup from the repository root:
 
-- `opencode.json` MCP registration
-- `skills/uniam/SKILL.md`
-- `uniam-instructions.md`
-- `plugins/uniam.js`
+```bash
+cd /path/to/repo
+uniam setup claude-code --project
+```
 
-`uniam setup opencode --project` is intentionally not supported.
+Project scope is always relative to the current working directory. Do not run `--project` from your home directory unless that is the actual project root you want to target.
+
+### Agent scope support
+
+| Agent | Scope support | Notes |
+| --- | --- | --- |
+| Claude Code | Global and project | Run `uniam setup claude-code --project` from the repo root to write `.mcp.json` and `./.claude/` there |
+| Cursor | Global and project | Run `uniam setup cursor --project` from the repo root to write `./.cursor/` there |
+| Windsurf | Global only | `--project` is not supported |
+| Antigravity | Global and project | Run `uniam setup antigravity --project` from the repo root to write `./.gemini/antigravity/` there |
+| Codex / Codex CLI | Global and project | Run `uniam setup codex --project` from the repo root to write `./.codex/` there |
+| OpenCode | Global and project | Run `uniam setup opencode --project` from the repo root to write `opencode.json` and `./.opencode/` there |
+| RooCode | Project only | Run `uniam setup roocode --project` from the repo root; it writes only to `./.roo/mcp.json` |
+| GitHub Copilot | Global and project | Run `uniam setup copilot --project` from the repo root to write `.mcp.json` and `./.github/` there |
+| Gemini CLI | Global and project | Run `uniam setup gemini-cli --project` from the repo root to write `./.gemini/` there |
 
 Run `uniam setup` again at any time to re-apply the config — it is **idempotent** and will not overwrite other entries in your agent's config. This will also update installed agent skill files to their latest version.
 
@@ -111,11 +133,97 @@ uniam update --check-only
 
 No config changes are needed — the agent always runs whatever `uniam` binary is in PATH when it starts the MCP server. Restart the agent after updating the binary.
 
+### Upgrading from 1.x to 2.x
+
+Existing notes and indexes are expected to carry forward when you upgrade in place and keep the same `UNIAM_HOME`. Uniam still uses the same home directory and migrates the SQLite schema forward on startup.
+
+Recommended upgrade flow:
+
+1. Replace the old `1.x` binary with the `2.x` binary from the latest release:
+
+   ```bash
+   chmod +x uniam-linux-amd64
+   mv uniam-linux-amd64 /usr/local/bin/uniam
+   ```
+
+   On `1.x`, the `uniam update` command does not exist yet, so the upgrade to `2.x` must start with replacing the binary.
+
+2. Re-run setup for each installed agent with the new `2.x` binary:
+
+   ```bash
+   uniam setup claude-code
+   uniam setup cursor
+   uniam setup opencode
+   ```
+
+3. Restart your agent applications.
+
+What happens during re-setup:
+
+- MCP config entries are updated in place
+- installed skill files are overwritten in place
+- managed OpenCode instructions and plugin files are overwritten in place in the selected scope
+- project Copilot instructions are overwritten in place when using project setup
+
+What does **not** get automatically rewritten everywhere:
+
+- manually maintained project rules such as `AGENTS.md`, `CLAUDE.md`, or `.rules`
+- the Codex `AGENTS.md` snippet if you already have an older Uniam section there
+
+That means you usually do **not** need to uninstall first just to avoid duplicate skill files. Skill files are replaced at the same path.
+
+The main place that may need manual refresh is old rules text that lives in repo files. If you want a clean refresh of those older rule blocks, remove or update them manually before re-running setup.
+
+For Codex specifically, `uniam uninstall codex` does not fully clean `.codex/AGENTS.md`; it only removes installed skills and tells you to remove Uniam entries from config and `AGENTS.md` manually.
+
+### Removing Uniam
+
+There are two different removal cases:
+
+#### 1. Remove Uniam from an agent
+
+Use:
+
+```bash
+uniam uninstall <agent>
+```
+
+Examples:
+
+```bash
+uniam uninstall claude-code
+uniam uninstall cursor
+uniam uninstall opencode
+```
+
+This removes the Uniam MCP integration for that agent and, where supported, removes installed skill files and related managed assets.
+
+Notes:
+
+- OpenCode uninstall also removes the managed instructions file and plugin in the selected scope
+- Codex uninstall is only partial and requires manual cleanup of `.codex/config.toml` and `.codex/AGENTS.md`
+- RooCode, Copilot, and some other integrations have platform-specific limits described by the CLI
+
+#### 2. Remove Uniam completely from your machine
+
+To remove Uniam fully:
+
+1. Remove it from the agents you configured:
+
+   ```bash
+   uniam uninstall <agent>
+   ```
+
+2. Delete the `uniam` binary from your `PATH`
+3. Delete `~/.uniam` if you also want to remove all stored notes, indexes, and config
+
+Deleting `~/.uniam` is destructive and removes your local memory store.
+
 ### Tell your agent to use Uniam
 
 MCP registration makes the tools available, but your agent also needs instructions to actually use them. The `setup` command installs a skill file automatically for agents that support it (Claude Code, Cursor, Windsurf, Antigravity, Codex, Codex CLI, OpenCode, Copilot, Gemini CLI). For other agents — or if you prefer to use a project-level rules file — add the following to your [AGENTS.md](AGENTS.md), `.rules`, `CLAUDE.md`, or equivalent:
 
-> **Note for VS Code Copilot users**: Copilot does not automatically read global skill files. You must manually copy the instructions from the installed `skills` folder (e.g., `~/.uniam/skills/uniam.md`) directly into your VS Code Copilot Chat Rules settings to ensure proper agent behavior.
+> **Note for VS Code Copilot users**: project setup installs repository-local instructions in `.github/copilot-instructions.md`. Global setup still requires you to manually copy the instructions from the installed `skills` folder into your Copilot Chat Rules settings.
 
 ```markdown
 ## Uniam

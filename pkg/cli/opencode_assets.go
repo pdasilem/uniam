@@ -3,7 +3,6 @@ package cli
 import _ "embed"
 
 const (
-	openCodeInstructionConfigRef = "./uniam-instructions.md"
 	openCodeInstructionsFileName = "uniam-instructions.md"
 	openCodePluginFileName       = "uniam.js"
 )

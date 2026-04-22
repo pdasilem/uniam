@@ -7,14 +7,6 @@ import (
 	"testing"
 )
 
-func TestSetupOpenCodeRejectsProjectMode(t *testing.T) {
-	t.Parallel()
-
-	if _, err := setupOpenCode(true, false); err == nil {
-		t.Fatal("setupOpenCode(true, false) error = nil, want unsupported project mode error")
-	}
-}
-
 func TestSetupOpenCodeInstallsGlobalAssetsAndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -40,14 +32,60 @@ func TestSetupOpenCodeInstallsGlobalAssetsAndIsIdempotent(t *testing.T) {
 	}
 
 	assertOpenCodeManagedFiles(t, target)
-	assertOpenCodeConfigState(t, configPath, true)
+	assertOpenCodeConfigState(t, configPath, "./keep.md", "./uniam-instructions.md", true)
 
 	if _, err := setupOpenCode(false, false); err != nil {
 		t.Fatalf("second setupOpenCode() error = %v", err)
 	}
 
 	assertOpenCodeManagedFiles(t, target)
-	assertOpenCodeConfigState(t, configPath, true)
+	assertOpenCodeConfigState(t, configPath, "./keep.md", "./uniam-instructions.md", true)
+}
+
+func TestSetupOpenCodeInstallsProjectAssetsAndIsIdempotent(t *testing.T) {
+	repo := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(wd)
+	})
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("os.Chdir() error = %v", err)
+	}
+
+	target := filepath.Join(repo, ".opencode")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+
+	configPath := filepath.Join(repo, "opencode.json")
+	existing := map[string]any{
+		"mcp": map[string]any{
+			"other": map[string]any{
+				"type": "local",
+			},
+		},
+		"instructions": []string{"./keep.md"},
+	}
+	writeJSONFixture(t, configPath, existing)
+
+	if _, err := setupOpenCode(true, false); err != nil {
+		t.Fatalf("setupOpenCode(true, false) error = %v", err)
+	}
+
+	assertOpenCodeManagedFiles(t, target)
+	assertOpenCodeConfigState(t, configPath, "./keep.md", ".opencode/uniam-instructions.md", true)
+
+	if _, err := setupOpenCode(true, false); err != nil {
+		t.Fatalf("second setupOpenCode(true, false) error = %v", err)
+	}
+
+	assertOpenCodeManagedFiles(t, target)
+	assertOpenCodeConfigState(t, configPath, "./keep.md", ".opencode/uniam-instructions.md", true)
 }
 
 func TestUninstallOpenCodeRemovesOnlyUniamManagedAssets(t *testing.T) {
@@ -78,7 +116,7 @@ func TestUninstallOpenCodeRemovesOnlyUniamManagedAssets(t *testing.T) {
 		t.Fatalf("uninstallOpenCode() error = %v", err)
 	}
 
-	assertOpenCodeConfigState(t, configPath, false)
+	assertOpenCodeConfigState(t, configPath, "./keep.md", "./uniam-instructions.md", false)
 
 	for _, path := range []string{
 		filepath.Join(target, "skills", "uniam", "SKILL.md"),
@@ -105,7 +143,7 @@ func assertOpenCodeManagedFiles(t *testing.T, target string) {
 	}
 }
 
-func assertOpenCodeConfigState(t *testing.T, configPath string, expectUniam bool) {
+func assertOpenCodeConfigState(t *testing.T, configPath string, keepInstruction string, uniamInstruction string, expectUniam bool) {
 	t.Helper()
 
 	data, err := os.ReadFile(configPath)
@@ -147,10 +185,10 @@ func assertOpenCodeConfigState(t *testing.T, configPath string, expectUniam bool
 			t.Fatalf("instruction value type = %T, want string", instruction)
 		}
 
-		if value == "./keep.md" {
+		if value == keepInstruction {
 			keepCount++
 		}
-		if value == openCodeInstructionConfigRef {
+		if value == uniamInstruction {
 			uniamCount++
 		}
 	}

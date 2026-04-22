@@ -17,6 +17,8 @@ import (
 var (
 	setupConfigDir string
 	setupProject   bool
+	setupFastCtx   bool
+	setupFastSet   bool
 )
 
 type agentFunc func(configDir string, project bool, fastContext bool) (map[string]string, error)
@@ -30,13 +32,17 @@ func runAgentCmd(agent string, handlers map[string]agentFunc, configDir string, 
 	}
 
 	fastContext := false
-	if isSetup && agent != "windsurf" && agent != "opencode" {
-		fmt.Print("install fast context? yes/no (default no): ")
-		reader := bufio.NewReader(os.Stdin)
-		response, _ := reader.ReadString('\n')
-		response = strings.TrimSpace(strings.ToLower(response))
-		if response == "yes" || response == "y" {
-			fastContext = true
+	if isSetup {
+		if setupFastSet {
+			fastContext = setupFastCtx
+		} else {
+			fmt.Print("install fast context? yes/no (default no): ")
+			reader := bufio.NewReader(os.Stdin)
+			response, _ := reader.ReadString('\n')
+			response = strings.TrimSpace(strings.ToLower(response))
+			if response == "yes" || response == "y" {
+				fastContext = true
+			}
 		}
 	}
 
@@ -55,6 +61,7 @@ var setupCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	//nolint:revive
 	Run: func(cmd *cobra.Command, args []string) {
+		setupFastSet = cmd.Flags().Changed("fast-context")
 		runAgentCmd(args[0], map[string]agentFunc{
 			"claude":      setupClaudeCode,
 			"claude-code": setupClaudeCode,
@@ -83,6 +90,7 @@ var uninstallCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	//nolint:revive
 	Run: func(cmd *cobra.Command, args []string) {
+		setupFastSet = false
 		runAgentCmd(args[0], map[string]agentFunc{
 			"claude":      uninstallClaudeCode,
 			"claude-code": uninstallClaudeCode,
@@ -108,6 +116,7 @@ var uninstallCmd = &cobra.Command{
 func init() {
 	setupCmd.Flags().StringVar(&setupConfigDir, "config-dir", "", "Path to agent config directory")
 	setupCmd.Flags().BoolVarP(&setupProject, "project", "p", false, "Install in current project instead of globally")
+	setupCmd.Flags().BoolVar(&setupFastCtx, "fast-context", false, "Also install ripgrep and code-search MCP servers")
 	uninstallCmd.Flags().StringVar(&setupConfigDir, "config-dir", "", "Path to agent config directory")
 	uninstallCmd.Flags().BoolVarP(&setupProject, "project", "p", false, "Uninstall from current project instead of globally")
 }
@@ -135,6 +144,24 @@ func openCodeConfigRoot() (string, error) {
 	}
 
 	return filepath.Join(home, ".config", "opencode"), nil
+}
+
+func openCodeInstallPaths(project bool) (target string, configPath string, instructionRef string, err error) {
+	if project {
+		cwd, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			return "", "", "", fmt.Errorf("failed to resolve current directory: %w", cwdErr)
+		}
+
+		return filepath.Join(cwd, ".opencode"), filepath.Join(cwd, "opencode.json"), ".opencode/" + openCodeInstructionsFileName, nil
+	}
+
+	target, err = openCodeConfigRoot()
+	if err != nil {
+		return "", "", "", err
+	}
+
+	return target, filepath.Join(target, "opencode.json"), "./" + openCodeInstructionsFileName, nil
 }
 
 func readJSONMap(path string) (map[string]any, error) {
@@ -171,6 +198,74 @@ func appendUniqueString(values []string, target string) []string {
 	}
 
 	return append(values, target)
+}
+
+const copilotRepoInstructionsManagedBlock = "<!-- uniam:begin copilot -->\n" +
+	"## Uniam\n\n" +
+	"Use Uniam for cross-session memory.\n\n" +
+	"Required workflow:\n" +
+	"- Before meaningful work, retrieve with `uniam_context`, `uniam_search`, or `uniam_retrieve`.\n" +
+	"- During long or decision-heavy work, checkpoint with `uniam_store`.\n" +
+	"- Before finishing meaningful work, store a final note with `uniam_store`.\n" +
+	"- Curate memory with `uniam_archive`, `uniam_supersede`, `uniam_update_note`, and `uniam_compact`.\n\n" +
+	"Current scope is only the current project or folder. Cross-project access is not allowed.\n" +
+	"<!-- uniam:end copilot -->\n"
+
+func upsertManagedBlock(path string, marker string, block string) error {
+	existing, _ := os.ReadFile(path)
+	text := string(existing)
+
+	begin := "<!-- uniam:begin " + marker + " -->"
+	end := "<!-- uniam:end " + marker + " -->"
+
+	start := strings.Index(text, begin)
+	finish := strings.Index(text, end)
+	if start >= 0 && finish >= 0 && finish >= start {
+		finish += len(end)
+		if finish < len(text) && text[finish] == '\n' {
+			finish++
+		}
+		text = text[:start] + block + text[finish:]
+	} else {
+		if len(text) > 0 && !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		text += block
+	}
+
+	return os.WriteFile(path, []byte(text), 0644)
+}
+
+func removeManagedBlock(path string, marker string) error {
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	text := string(existing)
+	begin := "<!-- uniam:begin " + marker + " -->"
+	end := "<!-- uniam:end " + marker + " -->"
+	start := strings.Index(text, begin)
+	finish := strings.Index(text, end)
+	if start < 0 || finish < 0 || finish < start {
+		return nil
+	}
+
+	finish += len(end)
+	if finish < len(text) && text[finish] == '\n' {
+		finish++
+	}
+	text = text[:start] + text[finish:]
+	text = strings.TrimSpace(text)
+	if text == "" {
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return removeErr
+		}
+		return nil
+	}
+
+	text += "\n"
+	return os.WriteFile(path, []byte(text), 0644)
 }
 
 func installOpenCodeInstructions(target string) error {
@@ -388,16 +483,15 @@ func setupCursor(configDir string, project bool, fastContext bool) (map[string]s
 }
 
 func setupWindsurf(configDir string, project bool, fastContext bool) (map[string]string, error) {
+	if project {
+		return nil, errors.New("Windsurf setup does not support --project. Install globally or use --config-dir for an explicit target")
+	}
+
 	var targets []string
 	if configDir != "" {
 		targets = append(targets, configDir)
 	} else {
-		var baseDir string
-		if project {
-			baseDir, _ = os.Getwd()
-		} else {
-			baseDir, _ = os.UserHomeDir()
-		}
+		baseDir, _ := os.UserHomeDir()
 
 		appTarget := filepath.Join(baseDir, ".codeium", "windsurf")
 		if info, err := os.Stat(appTarget); err == nil && info.IsDir() {
@@ -440,6 +534,10 @@ func setupWindsurf(configDir string, project bool, fastContext bool) (map[string
 			"args":    []string{"mcp"},
 		}
 
+		if fastContext {
+			addFastContextServers(mcpServers)
+		}
+
 		// Write config
 		if err := os.MkdirAll(target, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create config directory %s: %w", target, err)
@@ -457,6 +555,9 @@ func setupWindsurf(configDir string, project bool, fastContext bool) (map[string
 		msg := "Installed Uniam MCP server in " + configPath
 		if installSkill(target) {
 			msg += " and skill"
+		}
+		if fastContext && installFastContextSkill(target) {
+			msg += " with fast context"
 		}
 		installed = append(installed, msg)
 	}
@@ -588,16 +689,11 @@ func setupCodex(configDir string, project bool, fastContext bool) (map[string]st
 }
 
 func setupOpenCode(project bool, fastContext bool) (map[string]string, error) {
-	if project {
-		return nil, errors.New("OpenCode setup is global-only. Run `uniam setup opencode` without --project")
-	}
-
-	target, err := openCodeConfigRoot()
+	target, configPath, instructionRef, err := openCodeInstallPaths(project)
 	if err != nil {
 		return nil, err
 	}
 
-	configPath := filepath.Join(target, "opencode.json")
 	config, err := readJSONMap(configPath)
 	if err != nil {
 		return nil, err
@@ -613,6 +709,25 @@ func setupOpenCode(project bool, fastContext bool) (map[string]string, error) {
 		"type":    "local",
 		"command": []string{"uniam", "mcp"},
 	}
+	if fastContext {
+		mcp["ripgrep"] = map[string]any{
+			"type":    "local",
+			"command": []string{"npx", "-y", "mcp-ripgrep@latest"},
+		}
+
+		fmt.Println("Installing code-search-mcp...")
+		entry, installErr := installCodeSearch()
+		if installErr != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: code-search-mcp install failed: %v\n", installErr)
+			fmt.Fprintln(os.Stderr, "  Skipping code-search-mcp. You can retry by running 'uniam setup opencode --fast-context' again.")
+		} else {
+			home, _ := os.UserHomeDir()
+			mcp["code-search"] = map[string]any{
+				"type":    "local",
+				"command": []string{"node", entry, "--allowed-workspace", home},
+			}
+		}
+	}
 
 	instructions, _ := config["instructions"].([]any)
 	if instructions == nil {
@@ -625,7 +740,7 @@ func setupOpenCode(project bool, fastContext bool) (map[string]string, error) {
 			stringInstructions = append(stringInstructions, value)
 		}
 	}
-	stringInstructions = appendUniqueString(stringInstructions, openCodeInstructionConfigRef)
+	stringInstructions = appendUniqueString(stringInstructions, instructionRef)
 	normalizedInstructions := make([]any, 0, len(stringInstructions))
 	for _, instruction := range stringInstructions {
 		normalizedInstructions = append(normalizedInstructions, instruction)
@@ -654,7 +769,7 @@ func setupOpenCode(project bool, fastContext bool) (map[string]string, error) {
 
 	msg := "Installed Uniam OpenCode integration in " + target
 	if fastContext {
-		msg += " (fast context ignored for OpenCode)"
+		msg += " with fast context"
 	}
 	return map[string]string{"message": msg}, nil
 }
@@ -750,16 +865,15 @@ func uninstallCursor(configDir string, project bool, _ bool) (map[string]string,
 }
 
 func uninstallWindsurf(configDir string, project bool, _ bool) (map[string]string, error) {
+	if project {
+		return nil, errors.New("Windsurf uninstall does not support --project. Uninstall globally or use --config-dir for an explicit target")
+	}
+
 	var targets []string
 	if configDir != "" {
 		targets = append(targets, configDir)
 	} else {
-		var baseDir string
-		if project {
-			baseDir, _ = os.Getwd()
-		} else {
-			baseDir, _ = os.UserHomeDir()
-		}
+		baseDir, _ := os.UserHomeDir()
 
 		appTarget := filepath.Join(baseDir, ".codeium", "windsurf")
 		if info, err := os.Stat(appTarget); err == nil && info.IsDir() {
@@ -854,16 +968,11 @@ func uninstallCodex(configDir string, project bool, _ bool) (map[string]string, 
 }
 
 func uninstallOpenCode(project bool) (map[string]string, error) {
-	if project {
-		return nil, errors.New("OpenCode uninstall is global-only. Run `uniam uninstall opencode` without --project")
-	}
-
-	target, err := openCodeConfigRoot()
+	target, configPath, instructionRef, err := openCodeInstallPaths(project)
 	if err != nil {
 		return nil, err
 	}
 
-	configPath := filepath.Join(target, "opencode.json")
 	_, statErr := os.Stat(configPath)
 	configExists := !errors.Is(statErr, os.ErrNotExist)
 	config := make(map[string]any)
@@ -884,7 +993,7 @@ func uninstallOpenCode(project bool) (map[string]string, error) {
 		filtered := make([]any, 0, len(instructions))
 		for _, instruction := range instructions {
 			value, ok := instruction.(string)
-			if ok && value == openCodeInstructionConfigRef {
+			if ok && value == instructionRef {
 				continue
 			}
 
@@ -1040,13 +1149,25 @@ func getCopilotConfigPath() (string, error) {
 }
 
 func setupCopilot(_ string, project bool, fastContext bool) (map[string]string, error) {
+	var (
+		configPath string
+		agentHome  string
+		err        error
+	)
 	if project {
-		return nil, errors.New("GitHub Copilot only supports global installation for MCP servers.\nPlease run without the --project flag")
-	}
-
-	configPath, err := getCopilotConfigPath()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get copilot config path: %w", err)
+		cwd, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			return nil, fmt.Errorf("failed to resolve current directory: %w", cwdErr)
+		}
+		configPath = filepath.Join(cwd, ".mcp.json")
+		agentHome = filepath.Join(cwd, ".github")
+	} else {
+		configPath, err = getCopilotConfigPath()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get copilot config path: %w", err)
+		}
+		home, _ := os.UserHomeDir()
+		agentHome = filepath.Join(home, ".uniam")
 	}
 
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
@@ -1062,9 +1183,6 @@ func setupCopilot(_ string, project bool, fastContext bool) (map[string]string, 
 		return nil, fmt.Errorf("failed to write mcp.json: %w", err)
 	}
 
-	home, _ := os.UserHomeDir()
-	agentHome := filepath.Join(home, ".uniam")
-
 	installSkill(agentHome)
 	msg := "Installed Uniam MCP server in " + configPath + "\n"
 
@@ -1073,21 +1191,40 @@ func setupCopilot(_ string, project bool, fastContext bool) (map[string]string, 
 		msg += "Installed fast context MCP servers and skills.\n"
 	}
 
-	msg += "\n\033[33mIMPORTANT: VS Code Copilot does not automatically read global skill files.\033[0m\n"
-	msg += "Please add the instructions from \033[36m" + filepath.Join(agentHome, "skills") + "\033[0m\n"
-	msg += "directly into your VS Code Copilot extension settings (e.g. Chat Rules) to ensure proper agent behavior."
+	if project {
+		instructionsPath := filepath.Join(agentHome, "copilot-instructions.md")
+		if err := os.MkdirAll(agentHome, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create project .github directory: %w", err)
+		}
+		if err := upsertManagedBlock(instructionsPath, "copilot", copilotRepoInstructionsManagedBlock); err != nil {
+			return nil, fmt.Errorf("failed to write copilot instructions: %w", err)
+		}
+		msg += "Installed project skill and repository instructions in " + agentHome
+	} else {
+		msg += "\n\033[33mIMPORTANT: VS Code Copilot does not automatically read global skill files.\033[0m\n"
+		msg += "Please add the instructions from \033[36m" + filepath.Join(agentHome, "skills") + "\033[0m\n"
+		msg += "directly into your VS Code Copilot extension settings (e.g. Chat Rules) to ensure proper agent behavior."
+	}
 
 	return map[string]string{"message": msg}, nil
 }
 
 func uninstallCopilot(_ string, project bool, _ bool) (map[string]string, error) {
+	var (
+		configPath string
+		err        error
+	)
 	if project {
-		return nil, errors.New("GitHub Copilot only supports global uninstallation.\nPlease run without the --project flag")
-	}
-
-	configPath, err := getCopilotConfigPath()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get copilot config path: %w", err)
+		cwd, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			return nil, fmt.Errorf("failed to resolve current directory: %w", cwdErr)
+		}
+		configPath = filepath.Join(cwd, ".mcp.json")
+	} else {
+		configPath, err = getCopilotConfigPath()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get copilot config path: %w", err)
+		}
 	}
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -1096,6 +1233,13 @@ func uninstallCopilot(_ string, project bool, _ bool) (map[string]string, error)
 
 	if err := removeServersFromMCPJSON(configPath, []string{"uniam", "ripgrep", "code-search"}); err != nil {
 		return nil, err
+	}
+
+	if project {
+		cwd, _ := os.Getwd()
+		agentHome := filepath.Join(cwd, ".github")
+		_ = uninstallSkill(agentHome)
+		_ = removeManagedBlock(filepath.Join(agentHome, "copilot-instructions.md"), "copilot")
 	}
 
 	return map[string]string{
