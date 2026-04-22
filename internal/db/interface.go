@@ -19,6 +19,7 @@ var ErrDimensionMismatch = errors.New("embedding dimension mismatch")
 type Store interface {
 	InsertItem(item models.Item, details *string) (int64, error)
 	InsertVector(rowid int64, embedding []float32) error
+	DeleteVector(rowid int64) error
 	GetItem(itemID string) (*models.Item, bool, error)
 	GetDetails(itemID string) (*models.ItemDetail, error)
 	UpdateItem(itemID string, what *string, why *string, impact *string, tags []string, detailsAppend *string) error
@@ -27,7 +28,7 @@ type Store interface {
 	FTSSearch(query string, limit int, project *string, source *string) ([]models.SearchResult, error)
 	VectorSearch(queryEmbedding []float32, limit int, project *string, source *string) ([]models.SearchResult, error)
 	ListRecent(limit int, project *string, source *string) ([]models.SearchResult, error)
-	ListAllForReindex() ([]map[string]any, error)
+	ListAllForReindex(project *string) ([]map[string]any, error)
 	CountItems(project *string, source *string) (int64, error)
 	Stats(project *string, source *string) (*models.Stats, error)
 	HasVecTable() bool

@@ -1,10 +1,20 @@
 package core
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"uniam/internal/models"
 )
+
+type testEmbedder struct{}
+
+func (e *testEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	return []float32{0.1, 0.2, 0.3}, nil
+}
 
 func TestNewService(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -419,5 +429,168 @@ func TestService_Compact_CreatesCanonicalAndArchivesCoveredNotes(t *testing.T) {
 
 	if !results[0].IsCanonical {
 		t.Fatalf("expected remaining note to be canonical")
+	}
+}
+
+func TestService_Compact_UsesNarrowCandidateSelection(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svc, err := NewService(tmpDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	defer svc.Close()
+
+	patternCat := "pattern"
+	source := "codex"
+	sharedTags := []string{"pool", "db"}
+	if _, err := svc.Store(models.RawItemInput{
+		Title:    "Connection pool tuning",
+		What:     "Raised pool size and timeout",
+		Category: &patternCat,
+		Source:   &source,
+		Tags:     sharedTags,
+	}, "test-project"); err != nil {
+		t.Fatalf("Store() primary one error = %v", err)
+	}
+	if _, err := svc.Store(models.RawItemInput{
+		Title:    "Connection pool timeout",
+		What:     "Matched the same pool tuning workstream",
+		Category: &patternCat,
+		Source:   &source,
+		Tags:     sharedTags,
+	}, "test-project"); err != nil {
+		t.Fatalf("Store() primary two error = %v", err)
+	}
+
+	otherCat := "context"
+	if _, err := svc.Store(models.RawItemInput{
+		Title:    "Connection issue elsewhere",
+		What:     "Unrelated note that only shares a broad term",
+		Category: &otherCat,
+	}, "test-project"); err != nil {
+		t.Fatalf("Store() broad-match error = %v", err)
+	}
+
+	result, err := svc.Compact(models.RawItemInput{
+		Title: "Canonical connection pool summary",
+		What:  "Summarized pool work",
+	}, "test-project", "connection pool tuning", nil, 10, &patternCat)
+	if err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+
+	if result["covered_count"] != 2 {
+		t.Fatalf("expected covered_count=2, got %v", result["covered_count"])
+	}
+}
+
+func TestService_Reindex_RemovesDBEntriesMissingFromShelves(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svc, err := NewService(tmpDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	defer svc.Close()
+
+	svc.embeddingOnce.Do(func() {
+		svc.embeddingProvider = &testEmbedder{}
+	})
+
+	project := "test-project"
+	first, err := svc.Store(models.RawItemInput{Title: "Keep Me", What: "still in shelves"}, project)
+	if err != nil {
+		t.Fatalf("Store() first error = %v", err)
+	}
+	second, err := svc.Store(models.RawItemInput{Title: "Delete Me", What: "removed from shelves"}, project)
+	if err != nil {
+		t.Fatalf("Store() second error = %v", err)
+	}
+
+	filePath, _ := first["file_path"].(string)
+	secondID, _ := second["id"].(string)
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	filtered := make([]string, 0, len(lines))
+	skip := false
+	for _, line := range lines {
+		if line == "### Delete Me" {
+			skip = true
+			continue
+		}
+		if skip && strings.HasPrefix(line, "### ") {
+			skip = false
+		}
+		if !skip {
+			filtered = append(filtered, line)
+		}
+	}
+
+	if err := os.WriteFile(filePath, []byte(strings.Join(filtered, "\n")), 0644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	result, err := svc.Reindex(&project, nil)
+	if err != nil {
+		t.Fatalf("Reindex() error = %v", err)
+	}
+
+	if result["deleted"] != 1 {
+		t.Fatalf("expected one DB-only note deleted, got %v", result["deleted"])
+	}
+
+	got, _, err := svc.db.GetItem(secondID)
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if got != nil {
+		t.Fatal("expected missing shelf note to be deleted from DB")
+	}
+}
+
+func TestService_RemoveProject_RemovesDBAndShelves(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svc, err := NewService(tmpDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	defer svc.Close()
+
+	project := "test-project"
+	if _, err := svc.Store(models.RawItemInput{Title: "One", What: "first"}, project); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	if _, err := svc.Store(models.RawItemInput{Title: "Two", What: "second"}, project); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	deleted, err := svc.RemoveProject(project)
+	if err != nil {
+		t.Fatalf("RemoveProject() error = %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("RemoveProject() deleted = %d, want 2", deleted)
+	}
+
+	count, err := svc.CountItems(&project, nil)
+	if err != nil {
+		t.Fatalf("CountItems() error = %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("CountItems() = %d, want 0", count)
+	}
+
+	if _, err := os.Stat(filepath.Join(tmpDir, "shelves", project)); !os.IsNotExist(err) {
+		t.Fatalf("expected shelves dir to be removed, got err=%v", err)
 	}
 }

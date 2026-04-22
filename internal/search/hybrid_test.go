@@ -34,6 +34,7 @@ func (f *fakeStore) VectorSearch(_ []float32, _ int, _ *string, _ *string) ([]mo
 // Unused interface methods — zero-value implementations.
 func (f *fakeStore) InsertItem(_ models.Item, _ *string) (int64, error) { return 0, nil }
 func (f *fakeStore) InsertVector(_ int64, _ []float32) error            { return nil }
+func (f *fakeStore) DeleteVector(_ int64) error                         { return nil }
 func (f *fakeStore) GetItem(_ string) (*models.Item, bool, error)       { return nil, false, nil }
 func (f *fakeStore) GetDetails(_ string) (*models.ItemDetail, error)    { return nil, nil } //nolint:nilnil
 func (f *fakeStore) UpdateItem(_ string, _ *string, _ *string, _ *string, _ []string, _ *string) error {
@@ -46,8 +47,8 @@ func (f *fakeStore) DeleteItem(_ string) (bool, error) { return false, nil }
 func (f *fakeStore) ListRecent(_ int, _ *string, _ *string) ([]models.SearchResult, error) {
 	return nil, nil
 }
-func (f *fakeStore) ListAllForReindex() ([]map[string]any, error)   { return nil, nil }
-func (f *fakeStore) CountItems(_ *string, _ *string) (int64, error) { return 0, nil }
+func (f *fakeStore) ListAllForReindex(_ *string) ([]map[string]any, error) { return nil, nil }
+func (f *fakeStore) CountItems(_ *string, _ *string) (int64, error)        { return 0, nil }
 func (f *fakeStore) Stats(_ *string, _ *string) (*models.Stats, error) {
 	return &models.Stats{}, nil
 }

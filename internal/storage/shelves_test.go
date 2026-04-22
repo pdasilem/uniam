@@ -55,9 +55,23 @@ func TestWriteNoteItem(t *testing.T) {
 	if !contains(contentStr, "Test Item") {
 		t.Error("File should contain item title")
 	}
+	if !contains(contentStr, "<!-- uniam:id=test-id -->") {
+		t.Error("File should contain item ID marker")
+	}
 
 	if !contains(contentStr, "This is a test") {
 		t.Error("File should contain item what")
+	}
+
+	index, err := ScanProjectIndex(projectDir)
+	if err != nil {
+		t.Fatalf("ScanProjectIndex() error = %v", err)
+	}
+	if !index.IDs["test-id"] {
+		t.Error("ScanProjectIndex() should return the stored note ID")
+	}
+	if index.Sections != 1 {
+		t.Errorf("ScanProjectIndex() sections = %d, want 1", index.Sections)
 	}
 }
 

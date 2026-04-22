@@ -315,10 +315,8 @@ uniam search <query>        Search notes
 uniam retrieve <id>         Show full note details
 uniam list                  List recent notes
 uniam update-note <id>      Update a note explicitly
-uniam archive <id>          Archive a note
-uniam supersede <id>        Mark a note as superseded by another
 uniam compact               Create a canonical summary note
-uniam remove <id>           Delete a note
+uniam remove [id]           Delete one note, or all notes in the current project with confirmation
 uniam notes                 List daily note files (alias: log)
 uniam config                Show current configuration
 uniam config init           Generate a starter config.yaml
@@ -362,11 +360,17 @@ uniam store \
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--project` | `-p` | Filter to current project |
+| `--all` | `-a` | List across all projects instead of the current one |
 | `--limit` | `-n` | Maximum results |
 | `--source` | `-s` | Filter by source agent |
 | `--query` | `-q` | Text filter (list only) |
 | `--mode` |  | Retrieval mode (`list`, `search`) |
+
+`uniam reindex`:
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--all` | `-a` | Reindex all projects instead of only the current one |
 
 ## Under the hood
 
