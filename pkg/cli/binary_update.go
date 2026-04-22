@@ -17,7 +17,11 @@ var binaryUpdateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update the uniam binary from the latest GitHub release",
 	Run: func(cmd *cobra.Command, args []string) {
-		checker := update.NewChecker(buildinfo.Version)
+		checker := update.NewChecker(buildinfo.Version).WithProgress(func(message string) {
+			fmt.Println(message)
+		})
+
+		fmt.Println("Preparing update...")
 		result, err := checker.Check(context.Background(), true)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -34,6 +38,8 @@ var binaryUpdateCmd = &cobra.Command{
 			return
 		}
 
+		fmt.Printf("Update available: %s -> %s\n", result.CurrentVersion, result.LatestVersion)
+		fmt.Printf("Selected asset: %s\n", result.AssetName)
 		if err := checker.Apply(context.Background(), result); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)

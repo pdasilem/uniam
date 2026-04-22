@@ -57,6 +57,7 @@ type Checker struct {
 	cachePath      string
 	checkTTL       time.Duration
 	currentVersion string
+	progress       func(string)
 }
 
 // NewChecker constructs a release checker for the current installation.
@@ -93,21 +94,37 @@ func (c *Checker) WithCheckTTL(ttl time.Duration) *Checker {
 	return c
 }
 
+// WithProgress installs a callback for user-visible update progress stages.
+func (c *Checker) WithProgress(progress func(string)) *Checker {
+	c.progress = progress
+	return c
+}
+
 // Check returns cached or freshly fetched release information.
 func (c *Checker) Check(ctx context.Context, force bool) (*Result, error) {
 	if !force {
-		if cached, ok := c.loadCache(); ok {
+		c.report("Checking cached release metadata...")
+		if cached, ok := c.loadCache(false); ok {
 			cached.Cached = true
+			c.report("Using cached release metadata.")
 			return cached, nil
 		}
 	}
 
+	c.report("Querying latest release metadata...")
 	result, err := c.fetchLatest(ctx)
 	if err != nil {
+		if cached, ok := c.loadCache(true); ok {
+			cached.Cached = true
+			c.report("Release check failed; using cached metadata.")
+			return cached, nil
+		}
+
 		return nil, err
 	}
 
 	_ = c.storeCache(result)
+	c.report("Release metadata loaded.")
 
 	return result, nil
 }
@@ -133,6 +150,7 @@ func (c *Checker) Apply(ctx context.Context, result *Result) error {
 		return fmt.Errorf("binary path is not writable: %s", exePath)
 	}
 
+	c.report("Downloading latest release asset...")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, result.AssetURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create download request: %w", err)
@@ -173,14 +191,18 @@ func (c *Checker) Apply(ctx context.Context, result *Result) error {
 		}
 	}
 
+	c.report("Replacing current binary...")
 	if err := os.Rename(tmpPath, exePath); err != nil {
 		return fmt.Errorf("failed to replace current binary: %w", err)
 	}
 
+	_ = os.Remove(c.cachePath)
+	c.report("Update applied successfully.")
+
 	return nil
 }
 
-func (c *Checker) loadCache() (*Result, bool) {
+func (c *Checker) loadCache(ignoreTTL bool) (*Result, bool) {
 	data, err := os.ReadFile(c.cachePath)
 	if err != nil {
 		return nil, false
@@ -196,7 +218,11 @@ func (c *Checker) loadCache() (*Result, bool) {
 		return nil, false
 	}
 
-	if time.Since(checkedAt) > c.checkTTL {
+	if cache.Result.CurrentVersion != "" && c.currentVersion != "" && cache.Result.CurrentVersion != c.currentVersion {
+		return nil, false
+	}
+
+	if !ignoreTTL && time.Since(checkedAt) > c.checkTTL {
 		return nil, false
 	}
 
@@ -353,4 +379,10 @@ func isWritable(path string) bool {
 	}
 
 	return false
+}
+
+func (c *Checker) report(message string) {
+	if c.progress != nil && message != "" {
+		c.progress(message)
+	}
 }
