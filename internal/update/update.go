@@ -21,6 +21,7 @@ const (
 	defaultRepo           = "pdasilem/uniam"
 	defaultCheckTTL       = 24 * time.Hour
 	defaultGitHubEndpoint = "https://api.github.com"
+	defaultHTTPTimeout    = 20 * time.Second
 )
 
 // Result holds update check information.
@@ -65,7 +66,7 @@ func NewChecker(currentVersion string) *Checker {
 	home := config.GetUniamHome()
 
 	return &Checker{
-		client:         &http.Client{Timeout: 10 * time.Second},
+		client:         &http.Client{Timeout: defaultHTTPTimeout},
 		repo:           defaultRepo,
 		baseURL:        defaultGitHubEndpoint,
 		cachePath:      filepath.Join(home, "update-check.json"),
@@ -114,13 +115,18 @@ func (c *Checker) Check(ctx context.Context, force bool) (*Result, error) {
 	c.report("Querying latest release metadata...")
 	result, err := c.fetchLatest(ctx)
 	if err != nil {
+		c.report(fmt.Sprintf("Release check failed: %v", err))
+		c.report("Retrying release check once...")
+		result, err = c.fetchLatest(ctx)
+	}
+	if err != nil {
 		if cached, ok := c.loadCache(true); ok {
 			cached.Cached = true
 			c.report("Release check failed; using cached metadata.")
 			return cached, nil
 		}
 
-		return nil, err
+		return nil, fmt.Errorf("release check failed and no cached metadata is available yet: %w", err)
 	}
 
 	_ = c.storeCache(result)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"uniam/internal/buildinfo"
 	"uniam/internal/config"
@@ -81,9 +82,9 @@ var doctorCmd = &cobra.Command{
 		} else {
 			pass("binary path", exePath)
 			if isPathWritable(exePath) {
-				pass("binary writable", "yes")
+				pass("self-update", "binary path is writable")
 			} else {
-				warn("binary writable", "no")
+				warn("self-update", "binary path is not writable — update may require sudo or manual replacement")
 			}
 		}
 
@@ -112,9 +113,29 @@ var doctorCmd = &cobra.Command{
 			pass("context.semantic", cfg.Context.Semantic)
 		}
 
-		// --- Redaction ---
-		fmt.Println("\nRedaction:")
-		pass("built-in patterns", fmt.Sprintf("%d patterns", len(redaction.SensitivePatterns)))
+		svc, err := core.NewService(home)
+		if err == nil {
+			defer func() { _ = svc.Close() }()
+
+			provider, providerErr := svc.GetEmbeddingProvider()
+			if providerErr != nil {
+				fail("initialize provider", providerErr.Error())
+			} else {
+				pass("initialize provider", "ok")
+
+				embedding, embedErr := provider.Embed(context.Background(), "uniam doctor probe")
+				if embedErr != nil {
+					fail("live probe", embedErr.Error())
+					warn("", "check that your embedding service is running and reachable")
+				} else {
+					pass("live probe", fmt.Sprintf("ok — %d dimensions", len(embedding)))
+				}
+			}
+		}
+
+		// --- Sensitive data filtering ---
+		fmt.Println("\nSensitive data filtering:")
+		pass("built-in patterns", fmt.Sprintf("%d secret-masking patterns (Stripe, GitHub, AWS, Slack, private keys, JWT, password/secret/api key fields)", len(redaction.SensitivePatterns)))
 
 		if patterns, err := redaction.LoadUniamIgnore(ignorePath); err != nil && !os.IsNotExist(err) {
 			fail(".uniamignore patterns", err.Error())
@@ -122,8 +143,8 @@ var doctorCmd = &cobra.Command{
 			pass(".uniamignore patterns", fmt.Sprintf("%d custom patterns", len(patterns)))
 		}
 
-		// --- Agent readiness ---
-		fmt.Println("\nAgent readiness:")
+		// --- Project instructions ---
+		fmt.Println("\nProject instructions:")
 		rulesFiles := []string{"AGENTS.md", "CLAUDE.md", ".rules"}
 		foundRule := false
 		for _, name := range rulesFiles {
@@ -137,83 +158,40 @@ var doctorCmd = &cobra.Command{
 			warn("project rules", "no AGENTS.md / CLAUDE.md / .rules found in cwd")
 		}
 
+		// --- Agent integrations ---
+		fmt.Println("\nAgent integrations:")
 		homeDir, _ := os.UserHomeDir()
-		agentSkillChecks := []struct {
-			label string
-			path  string
-		}{
-			{"codex skill", filepath.Join(homeDir, ".codex", "skills", "uniam", "SKILL.md")},
-			{"claude skill", filepath.Join(homeDir, ".claude", "skills", "uniam", "SKILL.md")},
-			{"cursor skill", filepath.Join(homeDir, ".cursor", "skills", "uniam", "SKILL.md")},
-			{"gemini skill", filepath.Join(homeDir, ".gemini", "skills", "uniam", "SKILL.md")},
-		}
-		for _, check := range agentSkillChecks {
-			if _, err := os.Stat(check.path); err == nil {
-				pass(check.label, check.path)
-			}
-		}
-
 		if homeDir == "" {
-			warn("opencode global", "home directory is unavailable")
+			warn("integrations", "home directory is unavailable")
 		} else {
-			fmt.Println("\nOpenCode global integration:")
-
-			openCodePaths := newOpenCodePaths(homeDir)
-			if _, err := os.Stat(openCodePaths.ConfigPath); err != nil {
-				fail("opencode.json", fmt.Sprintf("missing — expected %s", openCodePaths.ConfigPath))
-			} else {
-				pass("opencode.json", openCodePaths.ConfigPath)
-
-				if err := verifyOpenCodeMCPConfig(openCodePaths.ConfigPath); err != nil {
-					fail("mcp.uniam", err.Error())
-				} else {
-					pass("mcp.uniam", "configured")
+			for _, integration := range globalIntegrationStatuses(homeDir) {
+				switch integration.status {
+				case "configured":
+					pass(integration.name, integration.detail)
+				case "not-supported":
+					warn(integration.name, integration.detail)
+				default:
+					warn(integration.name, integration.detail)
 				}
-			}
-
-			requiredOpenCodeFiles := []struct {
-				label string
-				path  string
-			}{
-				{"opencode skill", openCodePaths.SkillPath},
-				{"uniam instructions", openCodePaths.InstructionsPath},
-				{"opencode plugin", openCodePaths.PluginPath},
-			}
-			for _, check := range requiredOpenCodeFiles {
-				if _, err := os.Stat(check.path); err != nil {
-					fail(check.label, fmt.Sprintf("missing — expected %s", check.path))
-					continue
-				}
-
-				pass(check.label, check.path)
 			}
 		}
 
 		// --- Database & search ---
 		fmt.Println("\nDatabase & search:")
-
-		svc, err := core.NewService(home)
-		if err != nil {
+		if svc == nil {
 			fail("database connection", err.Error())
 			fmt.Println("\nFix the issues above and re-run `uniam doctor`.")
 			os.Exit(1)
 		}
 
-		defer func() { _ = svc.Close() }()
-
 		pass("database connection", "ok")
-
-		total, err := svc.CountItems(nil, nil)
-		if err != nil {
-			fail("note count", err.Error())
-		} else {
-			pass("note count", fmt.Sprintf("%d notes stored", total))
-		}
 
 		stats, err := svc.Stats(nil, nil)
 		if err != nil {
-			fail("active note count", err.Error())
+			fail("note stats", err.Error())
 		} else {
+			pass("project count", fmt.Sprintf("%d projects", len(stats.ByProject)))
+			pass("note count", fmt.Sprintf("%d notes stored", stats.Total))
 			pass("active note count", fmt.Sprintf("%d active / %d total", stats.Active, stats.Total))
 		}
 
@@ -232,24 +210,6 @@ var doctorCmd = &cobra.Command{
 			warn("update available", fmt.Sprintf("%s -> %s", release.CurrentVersion, release.LatestVersion))
 		} else {
 			pass("update status", "up to date")
-		}
-
-		// --- Embedding provider live test ---
-		fmt.Println("\nEmbedding provider:")
-
-		provider, err := svc.GetEmbeddingProvider()
-		if err != nil {
-			fail("initialize provider", err.Error())
-		} else {
-			pass("initialize provider", "ok")
-
-			embedding, err := provider.Embed(context.Background(), "uniam doctor probe")
-			if err != nil {
-				fail("live probe", err.Error())
-				warn("", "check that your embedding service is running and reachable")
-			} else {
-				pass("live probe", fmt.Sprintf("ok — %d dimensions", len(embedding)))
-			}
 		}
 
 		// --- Summary ---
@@ -284,6 +244,12 @@ type openCodePaths struct {
 	PluginPath       string
 }
 
+type integrationStatus struct {
+	name   string
+	status string
+	detail string
+}
+
 func newOpenCodePaths(homeDir string) openCodePaths {
 	baseDir := filepath.Join(homeDir, ".config", "opencode")
 
@@ -316,4 +282,175 @@ func verifyOpenCodeMCPConfig(configPath string) error {
 	}
 
 	return nil
+}
+
+func verifyJSONMCPConfig(configPath string, topKey string, serverKey string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read failed: %w", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return fmt.Errorf("invalid json: %w", err)
+	}
+
+	mcp, ok := decoded[topKey].(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s.%s missing in %s", topKey, serverKey, configPath)
+	}
+
+	if _, ok := mcp[serverKey]; !ok {
+		return fmt.Errorf("%s.%s missing in %s", topKey, serverKey, configPath)
+	}
+
+	return nil
+}
+
+func verifyCodexConfig(configPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read failed: %w", err)
+	}
+
+	if !strings.Contains(string(data), "[mcp_servers.uniam]") {
+		return fmt.Errorf("mcp_servers.uniam missing in %s", configPath)
+	}
+
+	return nil
+}
+
+func globalIntegrationStatuses(homeDir string) []integrationStatus {
+	statuses := []integrationStatus{
+		checkJSONIntegration("Claude Code", filepath.Join(homeDir, ".claude.json"), "mcpServers", "uniam", []string{
+			filepath.Join(homeDir, ".claude", "skills", "uniam", "SKILL.md"),
+		}),
+		checkJSONIntegration("Cursor", filepath.Join(homeDir, ".cursor", "mcp.json"), "mcpServers", "uniam", []string{
+			filepath.Join(homeDir, ".cursor", "skills", "uniam", "SKILL.md"),
+		}),
+		checkWindsurfIntegration(homeDir),
+		checkJSONIntegration("Antigravity", filepath.Join(homeDir, ".gemini", "antigravity", "mcp_config.json"), "mcpServers", "uniam", []string{
+			filepath.Join(homeDir, ".gemini", "antigravity", "skills", "uniam", "SKILL.md"),
+		}),
+		checkCodexIntegration(homeDir),
+		checkOpenCodeIntegration(homeDir),
+		{
+			name:   "RooCode",
+			status: "not-supported",
+			detail: "project-only integration; no global setup path",
+		},
+		checkJSONIntegration("GitHub Copilot", mustCopilotConfigPath(homeDir), "mcpServers", "uniam", []string{
+			filepath.Join(homeDir, ".uniam", "skills", "uniam", "SKILL.md"),
+		}),
+		checkJSONIntegration("Gemini CLI", filepath.Join(homeDir, ".gemini", "settings.json"), "mcpServers", "uniam", []string{
+			filepath.Join(homeDir, ".gemini", "skills", "uniam", "SKILL.md"),
+		}),
+	}
+
+	return statuses
+}
+
+func checkJSONIntegration(name string, configPath string, topKey string, serverKey string, requiredFiles []string) integrationStatus {
+	if _, err := os.Stat(configPath); err != nil {
+		return integrationStatus{name: name, status: "missing", detail: "not configured"}
+	}
+
+	if err := verifyJSONMCPConfig(configPath, topKey, serverKey); err != nil {
+		return integrationStatus{name: name, status: "broken", detail: err.Error()}
+	}
+
+	missing := missingPaths(requiredFiles)
+	detail := fmt.Sprintf("configured (%s)", configPath)
+	if len(missing) > 0 {
+		return integrationStatus{name: name, status: "broken", detail: fmt.Sprintf("config ok, missing %s", strings.Join(missing, ", "))}
+	}
+
+	return integrationStatus{name: name, status: "configured", detail: detail}
+}
+
+func checkCodexIntegration(homeDir string) integrationStatus {
+	configPath := filepath.Join(homeDir, ".codex", "config.toml")
+	if _, err := os.Stat(configPath); err != nil {
+		return integrationStatus{name: "Codex", status: "missing", detail: "not configured"}
+	}
+
+	if err := verifyCodexConfig(configPath); err != nil {
+		return integrationStatus{name: "Codex", status: "broken", detail: err.Error()}
+	}
+
+	missing := missingPaths([]string{
+		filepath.Join(homeDir, ".codex", "skills", "uniam", "SKILL.md"),
+	})
+	if len(missing) > 0 {
+		return integrationStatus{name: "Codex", status: "broken", detail: fmt.Sprintf("config ok, missing %s", strings.Join(missing, ", "))}
+	}
+
+	return integrationStatus{name: "Codex", status: "configured", detail: fmt.Sprintf("configured (%s)", configPath)}
+}
+
+func checkOpenCodeIntegration(homeDir string) integrationStatus {
+	paths := newOpenCodePaths(homeDir)
+	if _, err := os.Stat(paths.ConfigPath); err != nil {
+		return integrationStatus{name: "OpenCode", status: "missing", detail: "not configured"}
+	}
+
+	if err := verifyOpenCodeMCPConfig(paths.ConfigPath); err != nil {
+		return integrationStatus{name: "OpenCode", status: "broken", detail: err.Error()}
+	}
+
+	missing := missingPaths([]string{paths.SkillPath, paths.InstructionsPath, paths.PluginPath})
+	if len(missing) > 0 {
+		return integrationStatus{name: "OpenCode", status: "broken", detail: fmt.Sprintf("config ok, missing %s", strings.Join(missing, ", "))}
+	}
+
+	return integrationStatus{name: "OpenCode", status: "configured", detail: fmt.Sprintf("configured (%s)", paths.ConfigPath)}
+}
+
+func checkWindsurfIntegration(homeDir string) integrationStatus {
+	targets := []string{
+		filepath.Join(homeDir, ".codeium", "windsurf"),
+		filepath.Join(homeDir, ".codeium"),
+	}
+
+	for _, target := range targets {
+		configPath := filepath.Join(target, "mcp_config.json")
+		if _, err := os.Stat(configPath); err != nil {
+			continue
+		}
+
+		if err := verifyJSONMCPConfig(configPath, "mcpServers", "uniam"); err != nil {
+			return integrationStatus{name: "Windsurf", status: "broken", detail: err.Error()}
+		}
+
+		missing := missingPaths([]string{
+			filepath.Join(target, "skills", "uniam", "SKILL.md"),
+		})
+		if len(missing) > 0 {
+			return integrationStatus{name: "Windsurf", status: "broken", detail: fmt.Sprintf("config ok, missing %s", strings.Join(missing, ", "))}
+		}
+
+		return integrationStatus{name: "Windsurf", status: "configured", detail: fmt.Sprintf("configured (%s)", configPath)}
+	}
+
+	return integrationStatus{name: "Windsurf", status: "missing", detail: "not configured"}
+}
+
+func mustCopilotConfigPath(homeDir string) string {
+	path, err := getCopilotConfigPath()
+	if err != nil {
+		return filepath.Join(homeDir, ".config", "Code", "User", "globalStorage", "github.copilot-chat", "mcp.json")
+	}
+
+	return path
+}
+
+func missingPaths(paths []string) []string {
+	var missing []string
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			missing = append(missing, path)
+		}
+	}
+
+	return missing
 }

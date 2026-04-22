@@ -27,7 +27,7 @@ func runAgentCmd(agent string, handlers map[string]agentFunc, configDir string, 
 	fn, ok := handlers[agent]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "Error: unknown agent: %s\n", agent)
-		fmt.Fprintf(os.Stderr, "Supported agents: claude, cursor, windsurf, antigravity, codex, codex-cli, opencode, roocode, copilot, gemini-cli\n")
+		fmt.Fprintf(os.Stderr, "Supported agents: claude-code, cursor, windsurf, antigravity, codex, opencode, roocode, copilot, gemini-cli\n")
 		os.Exit(1)
 	}
 
@@ -63,13 +63,11 @@ var setupCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		setupFastSet = cmd.Flags().Changed("fast-context")
 		runAgentCmd(args[0], map[string]agentFunc{
-			"claude":      setupClaudeCode,
 			"claude-code": setupClaudeCode,
 			"cursor":      setupCursor,
 			"windsurf":    setupWindsurf,
 			"antigravity": setupAntigravity,
 			"codex":       setupCodex,
-			"codex-cli":   setupCodex,
 			"copilot":     setupCopilot,
 			"gemini-cli":  setupGeminiCli,
 			"opencode": func(configDir string, project bool, fast bool) (map[string]string, error) {
@@ -78,7 +76,6 @@ var setupCmd = &cobra.Command{
 				}
 				return setupOpenCode(project, fast)
 			},
-			"roo":     setupRooCode,
 			"roocode": setupRooCode,
 		}, setupConfigDir, setupProject, true)
 	},
@@ -92,13 +89,11 @@ var uninstallCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		setupFastSet = false
 		runAgentCmd(args[0], map[string]agentFunc{
-			"claude":      uninstallClaudeCode,
 			"claude-code": uninstallClaudeCode,
 			"cursor":      uninstallCursor,
 			"windsurf":    uninstallWindsurf,
 			"antigravity": uninstallAntigravity,
 			"codex":       uninstallCodex,
-			"codex-cli":   uninstallCodex,
 			"copilot":     uninstallCopilot,
 			"gemini-cli":  uninstallGeminiCli,
 			"opencode": func(configDir string, project bool, _ bool) (map[string]string, error) {
@@ -107,7 +102,6 @@ var uninstallCmd = &cobra.Command{
 				}
 				return uninstallOpenCode(project)
 			},
-			"roo":     uninstallRooCode,
 			"roocode": uninstallRooCode,
 		}, setupConfigDir, setupProject, false)
 	},
@@ -198,6 +192,24 @@ func appendUniqueString(values []string, target string) []string {
 	}
 
 	return append(values, target)
+}
+
+func setupMessage(agent string, location string, extras ...string) string {
+	msg := "Installed Uniam " + agent + " integration in " + location
+	if len(extras) > 0 {
+		msg += " (" + strings.Join(extras, ", ") + ")"
+	}
+
+	return msg
+}
+
+func uninstallMessage(agent string, location string, extras ...string) string {
+	msg := "Removed Uniam " + agent + " integration from " + location
+	if len(extras) > 0 {
+		msg += " (" + strings.Join(extras, ", ") + ")"
+	}
+
+	return msg
 }
 
 const copilotRepoInstructionsManagedBlock = "<!-- uniam:begin copilot -->\n" +
@@ -347,15 +359,15 @@ func setupClaudeCode(configDir string, project bool, fastContext bool) (map[stri
 		}
 	}
 
-	msg := "Installed Uniam MCP server in " + configPath
+	var extras []string
 	if installSkill(skillTarget) {
-		msg += " and skill" //nolint:goconst
+		extras = append(extras, "skill")
 	}
 	if fastContext && installFastContextSkill(skillTarget) {
-		msg += " with fast context"
+		extras = append(extras, "fast context")
 	}
 
-	return map[string]string{"message": msg}, nil
+	return map[string]string{"message": setupMessage("Claude Code", configPath, extras...)}, nil
 }
 
 // writeMCPJSON writes an MCP server entry into a .mcp.json file (project scope).
@@ -471,15 +483,15 @@ func setupCursor(configDir string, project bool, fastContext bool) (map[string]s
 		return nil, fmt.Errorf("failed to write config: %w", err)
 	}
 
-	msg := "Installed Uniam MCP server in " + configPath
+	var extras []string
 	if installSkill(target) {
-		msg += " and skill"
+		extras = append(extras, "skill")
 	}
 	if fastContext && installFastContextSkill(target) {
-		msg += " with fast context"
+		extras = append(extras, "fast context")
 	}
 
-	return map[string]string{"message": msg}, nil
+	return map[string]string{"message": setupMessage("Cursor", configPath, extras...)}, nil
 }
 
 func setupWindsurf(configDir string, project bool, fastContext bool) (map[string]string, error) {
@@ -552,13 +564,14 @@ func setupWindsurf(configDir string, project bool, fastContext bool) (map[string
 			return nil, fmt.Errorf("failed to write config for %s: %w", target, err)
 		}
 
-		msg := "Installed Uniam MCP server in " + configPath
+		var extras []string
 		if installSkill(target) {
-			msg += " and skill"
+			extras = append(extras, "skill")
 		}
 		if fastContext && installFastContextSkill(target) {
-			msg += " with fast context"
+			extras = append(extras, "fast context")
 		}
+		msg := setupMessage("Windsurf", configPath, extras...)
 		installed = append(installed, msg)
 	}
 
@@ -619,12 +632,12 @@ func setupAntigravity(configDir string, project bool, fastContext bool) (map[str
 		return nil, fmt.Errorf("failed to write config: %w", err)
 	}
 
-	msg := "Installed Uniam MCP server in " + configPath
+	var extras []string
 	if installSkill(target) {
-		msg += " and skill"
+		extras = append(extras, "skill")
 	}
 
-	return map[string]string{"message": msg}, nil
+	return map[string]string{"message": setupMessage("Antigravity", configPath, extras...)}, nil
 }
 
 func setupCodex(configDir string, project bool, fastContext bool) (map[string]string, error) {
@@ -677,15 +690,16 @@ func setupCodex(configDir string, project bool, fastContext bool) (map[string]st
 		}
 	}
 
-	msg := "Installed Uniam in " + target
+	var extras []string
 	if installSkill(target) {
-		msg += " (MCP + AGENTS.md + skill)"
+		extras = append(extras, "skill")
 	}
 	if fastContext && installFastContextSkill(target) {
-		msg += " + fast context"
+		extras = append(extras, "fast context")
 	}
+	extras = append([]string{"MCP", "AGENTS.md"}, extras...)
 
-	return map[string]string{"message": msg}, nil
+	return map[string]string{"message": setupMessage("Codex", target, extras...)}, nil
 }
 
 func setupOpenCode(project bool, fastContext bool) (map[string]string, error) {
@@ -767,11 +781,12 @@ func setupOpenCode(project bool, fastContext bool) (map[string]string, error) {
 		return nil, err
 	}
 
-	msg := "Installed Uniam OpenCode integration in " + target
+	var extras []string
 	if fastContext {
-		msg += " with fast context"
+		extras = append(extras, "fast context")
 	}
-	return map[string]string{"message": msg}, nil
+	extras = append([]string{"instructions", "plugin", "skill"}, extras...)
+	return map[string]string{"message": setupMessage("OpenCode", target, extras...)}, nil
 }
 
 // removeServersFromMCPJSON reads a JSON config file, removes the specified keys from
@@ -830,15 +845,15 @@ func uninstallClaudeCode(configDir string, project bool, _ bool) (map[string]str
 		return nil, err
 	}
 
-	msg := "Removed Uniam from " + configPath
+	var extras []string
 	if uninstallSkill(skillTarget) {
-		msg += " and skill"
+		extras = append(extras, "skill")
 	}
 	if uninstallFastContextSkill(skillTarget) {
-		msg += " and fast context skill"
+		extras = append(extras, "fast context skill")
 	}
 
-	return map[string]string{"message": msg}, nil
+	return map[string]string{"message": uninstallMessage("Claude Code", configPath, extras...)}, nil
 }
 
 func uninstallCursor(configDir string, project bool, _ bool) (map[string]string, error) {
@@ -853,15 +868,15 @@ func uninstallCursor(configDir string, project bool, _ bool) (map[string]string,
 		return nil, err
 	}
 
-	msg := "Removed Uniam from " + configPath
+	var extras []string
 	if uninstallSkill(target) {
-		msg += " and skill"
+		extras = append(extras, "skill")
 	}
 	if uninstallFastContextSkill(target) {
-		msg += " and fast context skill"
+		extras = append(extras, "fast context skill")
 	}
 
-	return map[string]string{"message": msg}, nil
+	return map[string]string{"message": uninstallMessage("Cursor", configPath, extras...)}, nil
 }
 
 func uninstallWindsurf(configDir string, project bool, _ bool) (map[string]string, error) {
@@ -902,13 +917,14 @@ func uninstallWindsurf(configDir string, project bool, _ bool) (map[string]strin
 			return nil, err
 		}
 
-		msg := "Removed Uniam from " + configPath
+		var extras []string
 		if uninstallSkill(target) {
-			msg += " and skill"
+			extras = append(extras, "skill")
 		}
 		if uninstallFastContextSkill(target) {
-			msg += " and fast context skill"
+			extras = append(extras, "fast context skill")
 		}
+		msg := uninstallMessage("Windsurf", configPath, extras...)
 		removed = append(removed, msg)
 	}
 
@@ -941,15 +957,15 @@ func uninstallAntigravity(configDir string, project bool, _ bool) (map[string]st
 		return nil, err
 	}
 
-	msg := "Removed Uniam from " + configPath
+	var extras []string
 	if uninstallSkill(target) {
-		msg += " and skill"
+		extras = append(extras, "skill")
 	}
 	if uninstallFastContextSkill(target) {
-		msg += " and fast context skill"
+		extras = append(extras, "fast context skill")
 	}
 
-	return map[string]string{"message": msg}, nil
+	return map[string]string{"message": uninstallMessage("Antigravity", configPath, extras...)}, nil
 }
 
 func uninstallCodex(configDir string, project bool, _ bool) (map[string]string, error) {
@@ -1017,7 +1033,7 @@ func uninstallOpenCode(project bool) (map[string]string, error) {
 	_ = uninstallSkill(target)
 
 	return map[string]string{
-		"message": "Removed Uniam OpenCode integration from " + target,
+		"message": uninstallMessage("OpenCode", target, "instructions", "plugin", "skill"),
 	}, nil
 }
 
@@ -1072,12 +1088,12 @@ func setupRooCode(configDir string, project bool, fastContext bool) (map[string]
 		return nil, fmt.Errorf("failed to write config: %w", err)
 	}
 
-	msg := "Installed Uniam MCP server in " + configPath
+	var extras []string
 	if fastContext {
-		msg += " with fast context"
+		extras = append(extras, "fast context")
 	}
 	return map[string]string{
-		"message": msg,
+		"message": setupMessage("RooCode", configPath, extras...),
 	}, nil
 }
 
@@ -1123,7 +1139,7 @@ func uninstallRooCode(configDir string, project bool, _ bool) (map[string]string
 	}
 
 	return map[string]string{
-		"message": "Removed Uniam from " + configPath,
+		"message": uninstallMessage("RooCode", configPath),
 	}, nil
 }
 
@@ -1184,12 +1200,15 @@ func setupCopilot(_ string, project bool, fastContext bool) (map[string]string, 
 	}
 
 	installSkill(agentHome)
-	msg := "Installed Uniam MCP server in " + configPath + "\n"
+	var extras []string
+	extras = append(extras, "skill")
 
 	if fastContext {
 		installFastContextSkill(agentHome)
-		msg += "Installed fast context MCP servers and skills.\n"
+		extras = append(extras, "fast context")
 	}
+
+	msg := setupMessage("GitHub Copilot", configPath, extras...)
 
 	if project {
 		instructionsPath := filepath.Join(agentHome, "copilot-instructions.md")
@@ -1199,7 +1218,7 @@ func setupCopilot(_ string, project bool, fastContext bool) (map[string]string, 
 		if err := upsertManagedBlock(instructionsPath, "copilot", copilotRepoInstructionsManagedBlock); err != nil {
 			return nil, fmt.Errorf("failed to write copilot instructions: %w", err)
 		}
-		msg += "Installed project skill and repository instructions in " + agentHome
+		msg += "\nRepository instructions installed in " + instructionsPath
 	} else {
 		msg += "\n\033[33mIMPORTANT: VS Code Copilot does not automatically read global skill files.\033[0m\n"
 		msg += "Please add the instructions from \033[36m" + filepath.Join(agentHome, "skills") + "\033[0m\n"
@@ -1243,7 +1262,7 @@ func uninstallCopilot(_ string, project bool, _ bool) (map[string]string, error)
 	}
 
 	return map[string]string{
-		"message": "Removed Uniam from " + configPath,
+		"message": uninstallMessage("GitHub Copilot", configPath),
 	}, nil
 }
 
@@ -1293,14 +1312,15 @@ func setupGeminiCli(_ string, project bool, fastContext bool) (map[string]string
 	}
 
 	installSkill(agentHome)
-	msg := "Installed Uniam MCP server in " + configPath + "\n"
+	var extras []string
+	extras = append(extras, "skill")
 
 	if fastContext {
 		installFastContextSkill(agentHome)
-		msg += "Installed fast context MCP servers and skills.\n"
+		extras = append(extras, "fast context")
 	}
 
-	return map[string]string{"message": msg}, nil
+	return map[string]string{"message": setupMessage("Gemini CLI", configPath, extras...)}, nil
 }
 
 func uninstallGeminiCli(_ string, project bool, _ bool) (map[string]string, error) {
@@ -1330,6 +1350,6 @@ func uninstallGeminiCli(_ string, project bool, _ bool) (map[string]string, erro
 	uninstallFastContextSkill(agentHome)
 
 	return map[string]string{
-		"message": "Removed Uniam from " + configPath,
+		"message": uninstallMessage("Gemini CLI", configPath),
 	}, nil
 }

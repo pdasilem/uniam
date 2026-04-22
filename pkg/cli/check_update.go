@@ -17,7 +17,11 @@ var checkUpdateCmd = &cobra.Command{
 	Use:   "check-update",
 	Short: "Check GitHub Releases for a newer uniam version",
 	Run: func(cmd *cobra.Command, args []string) {
-		checker := update.NewChecker(buildinfo.Version)
+		checker := update.NewChecker(buildinfo.Version).WithProgress(func(message string) {
+			fmt.Println(message)
+		})
+
+		fmt.Println("Preparing release check...")
 		result, err := checker.Check(context.Background(), checkUpdateForce)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)

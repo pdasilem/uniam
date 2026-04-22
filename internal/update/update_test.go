@@ -172,3 +172,73 @@ func TestCheckFallsBackToCachedResultOnFetchError(t *testing.T) {
 		t.Fatalf("LatestVersion = %q, want %q", result.LatestVersion, "v1.4.0")
 	}
 }
+
+func TestCheckReturnsHelpfulErrorWhenFetchFailsWithoutCache(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return nil, context.DeadlineExceeded
+		}),
+	}
+
+	checker := NewChecker("1.3.0").WithHTTPClient(client).WithBaseURL("https://example.invalid")
+	checker.cachePath = t.TempDir() + "/update-cache.json"
+
+	_, err := checker.Check(context.Background(), false)
+	if err == nil {
+		t.Fatal("Check() error = nil, want helpful no-cache error")
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "no cached metadata is available yet") {
+		t.Fatalf("Check() error = %q, want no-cache guidance", msg)
+	}
+}
+
+func TestCheckRetriesOnceBeforeSucceeding(t *testing.T) {
+	attempts := 0
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, context.DeadlineExceeded
+			}
+
+			body := `{
+				"tag_name":"v1.4.0",
+				"published_at":"2026-04-22T11:00:00Z",
+				"assets":[
+					{"name":"` + assetNameForCurrentPlatform() + `","browser_download_url":"https://example.invalid/retry-success"}
+				]
+			}`
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	var messages []string
+	checker := NewChecker("1.3.0").WithHTTPClient(client).WithBaseURL("https://example.invalid").WithProgress(func(message string) {
+		messages = append(messages, message)
+	})
+	checker.cachePath = t.TempDir() + "/update-cache.json"
+
+	result, err := checker.Check(context.Background(), false)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if result.LatestVersion != "v1.4.0" {
+		t.Fatalf("LatestVersion = %q, want %q", result.LatestVersion, "v1.4.0")
+	}
+
+	joined := strings.Join(messages, "\n")
+	if !strings.Contains(joined, "Retrying release check once") {
+		t.Fatalf("progress messages = %q, want retry message", joined)
+	}
+}

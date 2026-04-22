@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // codeSearchInstallDir returns the path where code-search-mcp will be installed.
@@ -99,6 +100,9 @@ func installCodeSearch() (string, error) {
 	}
 
 	dir := codeSearchInstallDir()
+	entry := codeSearchEntryPoint()
+	hadEntry := fileExists(entry)
+	beforeHead := gitHead(dir)
 
 	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
 		// Fresh clone
@@ -123,6 +127,12 @@ func installCodeSearch() (string, error) {
 		}
 	}
 
+	afterHead := gitHead(dir)
+	if hadEntry && beforeHead != "" && beforeHead == afterHead {
+		fmt.Printf("  code-search-mcp already built at %s\n", entry)
+		return entry, nil
+	}
+
 	// npm install
 	fmt.Println("  Running npm install ...")
 	npmInstall := exec.Command("npm", "install")
@@ -143,11 +153,25 @@ func installCodeSearch() (string, error) {
 		return "", fmt.Errorf("npm run build failed: %w", err)
 	}
 
-	entry := codeSearchEntryPoint()
 	if _, err := os.Stat(entry); err != nil {
 		return "", fmt.Errorf("build succeeded but entry point not found at %s", entry)
 	}
 
 	fmt.Printf("  code-search-mcp installed at %s\n", entry)
 	return entry, nil
+}
+
+func gitHead(dir string) string {
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "HEAD")
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(string(output))
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

@@ -59,6 +59,60 @@ func TestVerifyOpenCodeMCPConfig(t *testing.T) {
 	})
 }
 
+func TestVerifyJSONMCPConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("accepts configured generic mcp server", func(t *testing.T) {
+		t.Parallel()
+
+		configPath := writeTempOpenCodeConfig(t, `{"mcpServers":{"uniam":{"command":"uniam","args":["mcp"]}}}`)
+		if err := verifyJSONMCPConfig(configPath, "mcpServers", "uniam"); err != nil {
+			t.Fatalf("verifyJSONMCPConfig() error = %v", err)
+		}
+	})
+
+	t.Run("rejects missing server entry", func(t *testing.T) {
+		t.Parallel()
+
+		configPath := writeTempOpenCodeConfig(t, `{"mcpServers":{"other":{"command":"other"}}}`)
+		if err := verifyJSONMCPConfig(configPath, "mcpServers", "uniam"); err == nil {
+			t.Fatal("verifyJSONMCPConfig() error = nil, want missing server error")
+		}
+	})
+}
+
+func TestVerifyCodexConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("accepts codex config with uniam block", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.toml")
+		if err := os.WriteFile(path, []byte("[mcp_servers.uniam]\ncommand = \"uniam\"\n"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile() error = %v", err)
+		}
+
+		if err := verifyCodexConfig(path); err != nil {
+			t.Fatalf("verifyCodexConfig() error = %v", err)
+		}
+	})
+
+	t.Run("rejects codex config without uniam block", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.toml")
+		if err := os.WriteFile(path, []byte("[mcp_servers.other]\ncommand = \"other\"\n"), 0o644); err != nil {
+			t.Fatalf("os.WriteFile() error = %v", err)
+		}
+
+		if err := verifyCodexConfig(path); err == nil {
+			t.Fatal("verifyCodexConfig() error = nil, want missing block error")
+		}
+	})
+}
+
 func writeTempOpenCodeConfig(t *testing.T, contents string) string {
 	t.Helper()
 

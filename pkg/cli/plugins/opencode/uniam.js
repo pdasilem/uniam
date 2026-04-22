@@ -1,6 +1,20 @@
 export const UniamPlugin = async ({ client }) => {
   const sessions = new Map()
 
+  const getSessionID = (input) =>
+    input?.sessionID ?? input?.sessionId ?? input?.session?.id ?? input?.session?.sessionID ?? "global"
+
+  const getToolName = (input) => {
+    const tool = input?.tool
+    if (typeof tool === "string") {
+      return tool
+    }
+    if (tool && typeof tool === "object") {
+      return tool.name ?? tool.id ?? tool.tool ?? ""
+    }
+    return ""
+  }
+
   const ensure = (sessionID) => {
     const key = String(sessionID || "global")
     if (!sessions.has(key)) {
@@ -29,20 +43,12 @@ export const UniamPlugin = async ({ client }) => {
 
   return {
     "session.created": async (input) => {
-      ensure(input?.sessionID)
-    },
-
-    "tool.execute.before": async (input) => {
-      const state = ensure(input?.sessionID)
-      const tool = input?.tool
-      if (!state.retrieved && (tool === "edit" || tool === "write" || tool === "bash")) {
-        throw new Error("Uniam retrieval required before edit/write/bash. Call uniam_context, uniam_search, or uniam_retrieve first.")
-      }
+      ensure(getSessionID(input))
     },
 
     "tool.execute.after": async (input) => {
-      const state = ensure(input?.sessionID)
-      const tool = input?.tool
+      const state = ensure(getSessionID(input))
+      const tool = getToolName(input)
 
       if (tool === "uniam_context" || tool === "uniam_search" || tool === "uniam_retrieve") {
         state.retrieved = true
@@ -71,7 +77,7 @@ export const UniamPlugin = async ({ client }) => {
     },
 
     "session.idle": async (input) => {
-      const state = ensure(input?.sessionID)
+      const state = ensure(getSessionID(input))
       if (!state.dirty) {
         return
       }
@@ -80,7 +86,7 @@ export const UniamPlugin = async ({ client }) => {
     },
 
     "session.compacted": async (input) => {
-      const state = ensure(input?.sessionID)
+      const state = ensure(getSessionID(input))
       if (!state.dirty) {
         return
       }
@@ -89,7 +95,7 @@ export const UniamPlugin = async ({ client }) => {
     },
 
     "tui.prompt.append": async (input, output) => {
-      const state = ensure(input?.sessionID)
+      const state = ensure(getSessionID(input))
       if (!state.retrieved || state.dirty) {
         output.text = `${output.text || ""}\n\n[Uniam policy] ${state.lastReminder || reminder}`
       }

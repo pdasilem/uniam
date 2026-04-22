@@ -67,7 +67,7 @@ uniam init
 ### Connect your agent
 
 ```bash
-uniam setup claude-code   # or: cursor, windsurf, antigravity, codex, codex-cli, opencode, roocode, copilot, gemini-cli
+uniam setup claude-code   # or: cursor, windsurf, antigravity, codex, opencode, roocode, copilot, gemini-cli
 ```
 
 By default, `setup` asks whether to also install optional **fast context MCP servers** (`ripgrep` and `code-search-mcp`).
@@ -99,7 +99,7 @@ Project scope is always relative to the current working directory. Do not run `-
 | Cursor | Global and project | Run `uniam setup cursor --project` from the repo root to write `./.cursor/` there |
 | Windsurf | Global only | `--project` is not supported |
 | Antigravity | Global and project | Run `uniam setup antigravity --project` from the repo root to write `./.gemini/antigravity/` there |
-| Codex / Codex CLI | Global and project | Run `uniam setup codex --project` from the repo root to write `./.codex/` there |
+| Codex | Global and project | Run `uniam setup codex --project` from the repo root to write `./.codex/` there |
 | OpenCode | Global and project | Run `uniam setup opencode --project` from the repo root to write `opencode.json` and `./.opencode/` there |
 | RooCode | Project only | Run `uniam setup roocode --project` from the repo root; it writes only to `./.roo/mcp.json` |
 | GitHub Copilot | Global and project | Run `uniam setup copilot --project` from the repo root to write `.mcp.json` and `./.github/` there |
@@ -125,6 +125,12 @@ Apply the latest compatible release to the current binary path:
 uniam update
 ```
 
+Platform notes:
+
+- Linux: if `uniam` is installed in a system-owned path such as `/usr/local/bin/uniam`, run `sudo uniam update`. If it is installed in a user-writable path such as `~/.local/bin/uniam`, plain `uniam update` is enough.
+- macOS: use `uniam update` when the binary path is user-writable. If you installed it into a protected system path, run `sudo uniam update`. If Gatekeeper prompts after a manual binary replacement, allow the binary again in **System Settings → Privacy & Security**.
+- Windows: use `uniam check-update` to see whether a newer release exists, then replace `uniam-windows-amd64.exe` manually with the latest release asset. In-place self-update of the running `.exe` is not the recommended path on Windows.
+
 Check only without applying:
 
 ```bash
@@ -143,7 +149,7 @@ Recommended upgrade flow:
 
    ```bash
    chmod +x uniam-linux-amd64
-   mv uniam-linux-amd64 /usr/local/bin/uniam
+   sudo mv uniam-linux-amd64 /usr/local/bin/uniam
    ```
 
    On `1.x`, the `uniam update` command does not exist yet, so the upgrade to `2.x` must start with replacing the binary.
@@ -221,7 +227,7 @@ Deleting `~/.uniam` is destructive and removes your local memory store.
 
 ### Tell your agent to use Uniam
 
-MCP registration makes the tools available, but your agent also needs instructions to actually use them. The `setup` command installs a skill file automatically for agents that support it (Claude Code, Cursor, Windsurf, Antigravity, Codex, Codex CLI, OpenCode, Copilot, Gemini CLI). For other agents — or if you prefer to use a project-level rules file — add the following to your [AGENTS.md](AGENTS.md), `.rules`, `CLAUDE.md`, or equivalent:
+MCP registration makes the tools available, but your agent also needs instructions to actually use them. The `setup` command installs a skill file automatically for agents that support it (Claude Code, Cursor, Windsurf, Antigravity, Codex, OpenCode, Copilot, Gemini CLI). For other agents — or if you prefer to use a project-level rules file — add the following to your [AGENTS.md](AGENTS.md), `.rules`, `CLAUDE.md`, or equivalent:
 
 > **Note for VS Code Copilot users**: project setup installs repository-local instructions in `.github/copilot-instructions.md`. Global setup still requires you to manually copy the instructions from the installed `skills` folder into your Copilot Chat Rules settings.
 
