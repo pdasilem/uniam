@@ -138,9 +138,9 @@ run_contains "search finds pooling" "pooling" $UNIAM_BIN search "pooling"
 # --- list ---
 echo ""
 echo "--- list ---"
-run_contains "list shows items" "Notes" $UNIAM_BIN list
-run_contains "list shows stored items" "JWT auth" $UNIAM_BIN list
-run_contains "list with limit" "Notes" $UNIAM_BIN list --limit 5
+run_contains "list shows items" "Notes" $UNIAM_BIN list --all
+run_contains "list shows stored items" "JWT auth" $UNIAM_BIN list --all
+run_contains "list with limit" "Notes" $UNIAM_BIN list --all --limit 5
 
 # --- retrieve ---
 echo ""

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -11,6 +12,16 @@ import (
 
 	"uniam/internal/models"
 )
+
+var shelfIDPattern = regexp.MustCompile(`<!--\s*uniam:id=([A-Za-z0-9-]+)\s*-->`)
+
+// ShelfProjectIndex describes the note-ID coverage seen in a project shelves directory.
+type ShelfProjectIndex struct {
+	IDs           map[string]bool
+	MarkdownFiles int
+	Sections      int
+	IDLines       int
+}
 
 // WriteNoteItem writes an item to a daily notes file.
 func WriteNoteItem(projectDir string, item models.Item, dateStr string, details *string) (string, error) {
@@ -44,6 +55,7 @@ func renderSection(item models.Item, details *string) string {
 	var lines []string
 
 	lines = append(lines, "### "+item.Title)
+	lines = append(lines, fmt.Sprintf("<!-- uniam:id=%s -->", item.ID))
 	lines = append(lines, "**What:** "+item.What)
 
 	if item.Why != nil {
@@ -66,6 +78,50 @@ func renderSection(item models.Item, details *string) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// ScanProjectIndex scans a project shelves directory and returns all note IDs
+// explicitly present in markdown sections.
+func ScanProjectIndex(projectDir string) (*ShelfProjectIndex, error) {
+	index := &ShelfProjectIndex{IDs: map[string]bool{}}
+
+	entries, err := os.ReadDir(projectDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return index, nil
+		}
+
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+
+		index.MarkdownFiles++
+
+		content, err := os.ReadFile(filepath.Join(projectDir, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+
+		body := string(content)
+		index.Sections += strings.Count(body, "\n### ")
+		if strings.HasPrefix(body, "### ") {
+			index.Sections++
+		}
+
+		matches := shelfIDPattern.FindAllStringSubmatch(body, -1)
+		index.IDLines += len(matches)
+		for _, match := range matches {
+			if len(match) > 1 {
+				index.IDs[match[1]] = true
+			}
+		}
+	}
+
+	return index, nil
 }
 
 // createNewNotesFile creates a new notes file with frontmatter and initial content.

@@ -163,9 +163,18 @@ func (d *DB) InsertVector(rowid int64, embedding []float32) error {
 	}
 
 	return d.db.Exec(`
-		INSERT INTO items_vec (rowid, embedding)
+		INSERT OR REPLACE INTO items_vec (rowid, embedding)
 		VALUES (?, ?)
 	`, rowid, embeddingBytes).Error
+}
+
+// DeleteVector removes the embedding row for an item rowid.
+func (d *DB) DeleteVector(rowid int64) error {
+	if !d.HasVecTable() {
+		return nil
+	}
+
+	return d.db.Exec("DELETE FROM items_vec WHERE rowid = ?", rowid).Error
 }
 
 // GetItem gets an item by ID using GORM.
@@ -315,6 +324,12 @@ func (d *DB) DeleteItem(itemID string) (bool, error) {
 	}
 
 	fullID := itemModel.ID
+	var rowid int64
+	_ = d.db.Raw("SELECT rowid FROM items WHERE id = ?", fullID).Scan(&rowid).Error
+
+	if rowid > 0 {
+		_ = d.DeleteVector(rowid)
+	}
 
 	// Delete details first
 	d.db.Where("item_id = ?", fullID).Delete(&ItemDetailModel{})
@@ -658,10 +673,15 @@ func (d *DB) ListRecent(limit int, project *string, source *string) ([]models.Se
 	return results, nil
 }
 
-// ListAllForReindex lists all items with fields needed for re-embedding using GORM.
-func (d *DB) ListAllForReindex() ([]map[string]any, error) {
+// ListAllForReindex lists items with fields needed for re-embedding using GORM.
+func (d *DB) ListAllForReindex(project *string) ([]map[string]any, error) {
+	query := d.db.Order("rowid")
+	if project != nil {
+		query = query.Where("project = ?", *project)
+	}
+
 	var itemModels []ItemModel
-	if err := d.db.Order("rowid").Find(&itemModels).Error; err != nil {
+	if err := query.Find(&itemModels).Error; err != nil {
 		return nil, err
 	}
 
@@ -674,9 +694,11 @@ func (d *DB) ListAllForReindex() ([]map[string]any, error) {
 		d.db.Raw("SELECT rowid FROM items WHERE id = ?", im.ID).Scan(&rowid)
 
 		result := map[string]any{
-			"rowid": rowid,
-			"title": im.Title,
-			"what":  im.What,
+			"id":      im.ID,
+			"project": im.Project,
+			"rowid":   rowid,
+			"title":   im.Title,
+			"what":    im.What,
 		}
 		if im.Why != nil {
 			result["why"] = *im.Why

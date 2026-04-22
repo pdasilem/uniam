@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +24,11 @@ import (
 const (
 	// DedupScoreThreshold is the minimum normalized FTS score (0–1) combined
 	// with an exact title match required to treat a new store as an update.
-	DedupScoreThreshold = 0.7
+	DedupScoreThreshold              = 0.7
+	compactMinLexicalRatio           = 0.6
+	compactMinMatchedTerms           = 2
+	compactAnchorScoreRatioThreshold = 0.55
+	compactStepScoreDropThreshold    = 0.72
 )
 
 // Option is a functional option for NewService.
@@ -558,18 +563,9 @@ func (s *Service) Compact(summary models.RawItemInput, project string, query str
 		return nil, err
 	}
 
-	filtered := make([]models.SearchResult, 0, len(results))
-	for _, result := range results {
-		if category != nil {
-			if result.Category == nil || *result.Category != *category {
-				continue
-			}
-		}
-		filtered = append(filtered, result)
-	}
-
+	filtered := selectCompactCandidates(results, query, source, category)
 	if len(filtered) == 0 {
-		return nil, errors.New("no notes matched compact query")
+		return nil, errors.New("no notes matched compact query narrowly enough for compaction")
 	}
 
 	summary.IsCanonical = true
@@ -602,16 +598,103 @@ func (s *Service) Compact(summary models.RawItemInput, project string, query str
 	return created, nil
 }
 
+func selectCompactCandidates(results []models.SearchResult, query string, source *string, category *string) []models.SearchResult {
+	queryTerms := compactTerms(query)
+	if len(queryTerms) == 0 {
+		return nil
+	}
+
+	accepted := make([]models.SearchResult, 0, len(results))
+	for _, result := range results {
+		if result.IsCanonical || result.CoveredBy != nil || result.Status != models.StatusActive {
+			continue
+		}
+		if source != nil {
+			if result.Source == nil || !strings.EqualFold(*result.Source, *source) {
+				continue
+			}
+		}
+		if category != nil {
+			if result.Category == nil || *result.Category != *category {
+				continue
+			}
+		}
+		matchedTerms := compactMatchedTerms(result, queryTerms)
+		if !compactLexicallyEligible(matchedTerms, len(queryTerms)) {
+			continue
+		}
+
+		accepted = append(accepted, result)
+	}
+
+	if len(accepted) == 0 {
+		return nil
+	}
+
+	cluster := make([]models.SearchResult, 0, len(accepted))
+	anchor := accepted[0]
+	cluster = append(cluster, anchor)
+	prev := anchor
+
+	for _, candidate := range accepted[1:] {
+		if compactScoreDropsTooFar(anchor.Score, prev.Score, candidate.Score) {
+			break
+		}
+		if compactStructuralSimilarity(anchor, candidate) == 0 && compactMatchedTerms(candidate, queryTerms) < len(queryTerms) {
+			continue
+		}
+
+		cluster = append(cluster, candidate)
+		prev = candidate
+	}
+
+	return cluster
+}
+
 // Remove removes an item from uniam.
 func (s *Service) Remove(itemID string) (bool, error) {
 	return s.db.DeleteItem(itemID)
 }
 
+// RemoveProject removes all notes for a project from the database and shelves.
+func (s *Service) RemoveProject(project string) (int, error) {
+	items, err := s.db.ListAllForReindex(&project)
+	if err != nil {
+		return 0, err
+	}
+
+	deleted := 0
+	for _, item := range items {
+		id, _ := item["id"].(string)
+		if id == "" {
+			continue
+		}
+		ok, err := s.db.DeleteItem(id)
+		if err != nil {
+			return deleted, err
+		}
+		if ok {
+			deleted++
+		}
+	}
+
+	if err := os.RemoveAll(filepath.Join(s.shelvesDir, project)); err != nil {
+		return deleted, err
+	}
+
+	return deleted, nil
+}
+
 // Reindex rebuilds the vector table with current embedding provider.
-func (s *Service) Reindex(progressCallback func(current, total int)) (map[string]any, error) {
+func (s *Service) Reindex(project *string, progressCallback func(current, total int)) (map[string]any, error) {
 	provider, err := s.GetEmbeddingProvider()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get embedding provider: %w", err)
+	}
+
+	deleted, skippedProjects, err := s.reconcileDBWithShelves(project)
+	if err != nil {
+		return nil, err
 	}
 
 	// Detect dimension from provider
@@ -622,21 +705,31 @@ func (s *Service) Reindex(progressCallback func(current, total int)) (map[string
 
 	dim := len(probe)
 
-	// Drop and recreate vec table
-	if err := s.db.DropVecTable(); err != nil {
-		return nil, fmt.Errorf("failed to drop vec table: %w", err)
+	if project == nil {
+		// Drop and recreate vec table
+		if err := s.db.DropVecTable(); err != nil {
+			return nil, fmt.Errorf("failed to drop vec table: %w", err)
+		}
+
+		if err := s.db.SetEmbeddingDim(dim); err != nil {
+			return nil, err
+		}
+
+		if err := s.db.EnsureVecTable(dim); err != nil {
+			return nil, err
+		}
+	} else {
+		if !s.db.HasVecTable() {
+			if err := s.db.SetEmbeddingDim(dim); err != nil {
+				return nil, err
+			}
+		}
+		if err := s.db.EnsureVecTable(dim); err != nil {
+			return nil, err
+		}
 	}
 
-	if err := s.db.SetEmbeddingDim(dim); err != nil {
-		return nil, err
-	}
-
-	if err := s.db.EnsureVecTable(dim); err != nil {
-		return nil, err
-	}
-
-	// Re-embed all items
-	items, err := s.db.ListAllForReindex()
+	items, err := s.db.ListAllForReindex(project)
 	if err != nil {
 		return nil, err
 	}
@@ -666,6 +759,9 @@ func (s *Service) Reindex(progressCallback func(current, total int)) (map[string
 			continue
 		}
 
+		if project != nil {
+			_ = s.db.DeleteVector(rowid)
+		}
 		_ = s.db.InsertVector(rowid, embedding)
 
 		if progressCallback != nil {
@@ -673,11 +769,89 @@ func (s *Service) Reindex(progressCallback func(current, total int)) (map[string
 		}
 	}
 
-	return map[string]any{
-		"count": total,
-		"dim":   dim,
-		"model": s.config.Embedding.Model,
-	}, nil
+	result := map[string]any{
+		"count":   total,
+		"dim":     dim,
+		"model":   s.config.Embedding.Model,
+		"deleted": deleted,
+	}
+	if project != nil {
+		result["project"] = *project
+	} else {
+		result["scope"] = "all"
+	}
+	if len(skippedProjects) > 0 {
+		result["skipped_projects"] = skippedProjects
+	}
+
+	return result, nil
+}
+
+func (s *Service) reconcileDBWithShelves(project *string) (int, []string, error) {
+	items, err := s.db.ListAllForReindex(project)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	byProject := make(map[string][]map[string]any)
+	for _, item := range items {
+		projectName, _ := item["project"].(string)
+		if projectName == "" {
+			continue
+		}
+		byProject[projectName] = append(byProject[projectName], item)
+	}
+
+	projectNames := make([]string, 0, len(byProject))
+	for projectName := range byProject {
+		projectNames = append(projectNames, projectName)
+	}
+	sort.Strings(projectNames)
+
+	deleted := 0
+	skippedProjects := make([]string, 0)
+
+	for _, projectName := range projectNames {
+		index, err := storage.ScanProjectIndex(filepath.Join(s.shelvesDir, projectName))
+		if err != nil {
+			return deleted, skippedProjects, err
+		}
+
+		switch {
+		case index.MarkdownFiles == 0 || index.Sections == 0:
+			for _, item := range byProject[projectName] {
+				id, _ := item["id"].(string)
+				if id == "" {
+					continue
+				}
+				ok, err := s.db.DeleteItem(id)
+				if err != nil {
+					return deleted, skippedProjects, err
+				}
+				if ok {
+					deleted++
+				}
+			}
+		case index.Sections != index.IDLines || index.IDLines != len(index.IDs):
+			skippedProjects = append(skippedProjects, projectName)
+		default:
+			for _, item := range byProject[projectName] {
+				id, _ := item["id"].(string)
+				if id == "" || index.IDs[id] {
+					continue
+				}
+				ok, err := s.db.DeleteItem(id)
+				if err != nil {
+					return deleted, skippedProjects, err
+				}
+				if ok {
+					deleted++
+				}
+			}
+		}
+	}
+
+	return deleted, skippedProjects, nil
 }
 
 // Close closes the service and cleans up resources.
@@ -804,6 +978,118 @@ func buildCompactDetails(results []models.SearchResult) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func compactTerms(input string) []string {
+	parts := strings.FieldsFunc(strings.ToLower(input), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+
+	seen := make(map[string]bool, len(parts))
+	terms := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		terms = append(terms, part)
+	}
+
+	return terms
+}
+
+func compactMatchedTerms(result models.SearchResult, queryTerms []string) int {
+	if len(queryTerms) == 0 {
+		return 0
+	}
+
+	corpusTerms := compactTerms(strings.Join([]string{result.Title, result.What, strings.Join(result.Tags, " ")}, " "))
+	if len(corpusTerms) == 0 {
+		return 0
+	}
+
+	matched := 0
+	for _, queryTerm := range queryTerms {
+		for _, corpusTerm := range corpusTerms {
+			if strings.HasPrefix(corpusTerm, queryTerm) || strings.HasPrefix(queryTerm, corpusTerm) {
+				matched++
+				break
+			}
+		}
+	}
+
+	return matched
+}
+
+func compactLexicallyEligible(matchedTerms int, totalTerms int) bool {
+	if matchedTerms == 0 || totalTerms == 0 {
+		return false
+	}
+	if totalTerms == 1 {
+		return matchedTerms == 1
+	}
+	if matchedTerms < compactMinMatchedTerms {
+		return false
+	}
+
+	return float64(matchedTerms)/float64(totalTerms) >= compactMinLexicalRatio
+}
+
+func compactScoreDropsTooFar(anchorScore float64, previousScore float64, candidateScore float64) bool {
+	if anchorScore > 0 && candidateScore < anchorScore*compactAnchorScoreRatioThreshold {
+		return true
+	}
+	if previousScore > 0 && candidateScore < previousScore*compactStepScoreDropThreshold {
+		return true
+	}
+
+	return false
+}
+
+func compactStructuralSimilarity(anchor models.SearchResult, candidate models.SearchResult) int {
+	score := 0
+
+	if anchor.Category != nil && candidate.Category != nil && *anchor.Category == *candidate.Category {
+		score++
+	}
+	if anchor.Source != nil && candidate.Source != nil && strings.EqualFold(*anchor.Source, *candidate.Source) {
+		score++
+	}
+	if compactTagOverlap(anchor.Tags, candidate.Tags) {
+		score++
+	}
+
+	anchorTime, anchorErr := time.Parse(time.RFC3339, anchor.CreatedAt)
+	candidateTime, candidateErr := time.Parse(time.RFC3339, candidate.CreatedAt)
+	if anchorErr == nil && candidateErr == nil {
+		delta := anchorTime.Sub(candidateTime)
+		if delta < 0 {
+			delta = -delta
+		}
+		if delta.Hours() <= 24*30 {
+			score++
+		}
+	}
+
+	return score
+}
+
+func compactTagOverlap(left []string, right []string) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+
+	seen := make(map[string]bool, len(left))
+	for _, tag := range left {
+		seen[strings.ToLower(tag)] = true
+	}
+	for _, tag := range right {
+		if seen[strings.ToLower(tag)] {
+			return true
+		}
+	}
+
+	return false
 }
 
 func mergeTags(existing []string, extra []string) []string {

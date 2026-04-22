@@ -547,7 +547,7 @@ func TestListAllForReindex_HasRowid(t *testing.T) {
 		t.Fatalf("InsertItem() error = %v", err)
 	}
 
-	items, err := d.ListAllForReindex()
+	items, err := d.ListAllForReindex(nil)
 	if err != nil {
 		t.Fatalf("ListAllForReindex() error = %v", err)
 	}

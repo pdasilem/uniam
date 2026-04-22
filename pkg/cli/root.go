@@ -91,8 +91,6 @@ func init() {
 	rootCmd.AddCommand(retrieveCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(updateCmd)
-	rootCmd.AddCommand(archiveCmd)
-	rootCmd.AddCommand(supersedeCmd)
 	rootCmd.AddCommand(compactCmd)
 	rootCmd.AddCommand(removeCmd)
 	rootCmd.AddCommand(notesCmd)

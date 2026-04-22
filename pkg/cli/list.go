@@ -13,11 +13,11 @@ import (
 )
 
 var (
-	listLimit   int
-	listProject bool
-	listSource  string
-	listQuery   string
-	listMode    string
+	listLimit  int
+	listAll    bool
+	listSource string
+	listQuery  string
+	listMode   string
 )
 
 var listCmd = &cobra.Command{
@@ -34,8 +34,7 @@ var listCmd = &cobra.Command{
 		defer func() { _ = svc.Close() }()
 
 		var project *string
-
-		if listProject {
+		if !listAll {
 			dir, _ := os.Getwd()
 			projectName := filepath.Base(dir)
 			project = &projectName
@@ -92,7 +91,7 @@ var listCmd = &cobra.Command{
 
 func init() {
 	listCmd.Flags().IntVarP(&listLimit, "limit", "n", 10, "Maximum number of notes")
-	listCmd.Flags().BoolVarP(&listProject, "project", "p", false, "Filter to current project")
+	listCmd.Flags().BoolVarP(&listAll, "all", "a", false, "List notes from all projects instead of only the current project")
 	listCmd.Flags().StringVarP(&listSource, "source", "s", "", "Filter by source")
 	listCmd.Flags().StringVarP(&listQuery, "query", "q", "", "Search query for filtering")
 	listCmd.Flags().StringVar(&listMode, "mode", "startup", "Retrieval mode: startup, search, debug, architecture, maintenance")
