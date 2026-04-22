@@ -3,6 +3,8 @@ package search
 import (
 	"context"
 	"sort"
+	"strings"
+	"time"
 
 	"uniam/internal/db"
 	"uniam/internal/embeddings"
@@ -78,6 +80,106 @@ func MergeResults(ftsResults []models.SearchResult, vecResults []models.SearchRe
 	}
 
 	return ranked
+}
+
+// ApplyRetrievalMode re-ranks results based on the requested retrieval profile.
+func ApplyRetrievalMode(results []models.SearchResult, mode string) []models.SearchResult {
+	reranked := make([]models.SearchResult, len(results))
+	copy(reranked, results)
+
+	now := time.Now().UTC()
+	for i := range reranked {
+		reranked[i].Score += recencyBoost(reranked[i].CreatedAt, now, mode)
+		reranked[i].Score += categoryBoost(reranked[i].Category, mode)
+		reranked[i].Score += canonicalBoost(reranked[i].IsCanonical, mode)
+		reranked[i].Score += sourceBoost(reranked[i].Source, mode)
+	}
+
+	sort.Slice(reranked, func(i, j int) bool {
+		return reranked[i].Score > reranked[j].Score
+	})
+
+	return reranked
+}
+
+func recencyBoost(createdAt string, now time.Time, mode string) float64 {
+	parsed, err := time.Parse(time.RFC3339, createdAt)
+	if err != nil {
+		return 0
+	}
+
+	days := now.Sub(parsed).Hours() / 24
+	switch mode {
+	case models.RetrievalStartup:
+		if days <= 3 {
+			return 0.25
+		}
+		if days <= 14 {
+			return 0.10
+		}
+	case models.RetrievalDebug:
+		if days <= 7 {
+			return 0.20
+		}
+	case models.RetrievalMaint:
+		if days <= 30 {
+			return 0.10
+		}
+	}
+
+	return 0
+}
+
+func categoryBoost(category *string, mode string) float64 {
+	if category == nil {
+		return 0
+	}
+
+	switch mode {
+	case models.RetrievalDebug:
+		if *category == "bug" {
+			return 0.30
+		}
+	case models.RetrievalArch:
+		if *category == "decision" || *category == "pattern" {
+			return 0.25
+		}
+	case models.RetrievalMaint:
+		if *category == "context" || *category == "pattern" {
+			return 0.15
+		}
+	case models.RetrievalStartup:
+		if *category == "decision" || *category == "context" {
+			return 0.10
+		}
+	}
+
+	return 0
+}
+
+func canonicalBoost(isCanonical bool, mode string) float64 {
+	if !isCanonical {
+		return 0
+	}
+
+	switch mode {
+	case models.RetrievalStartup, models.RetrievalArch, models.RetrievalMaint:
+		return 0.25
+	default:
+		return 0.10
+	}
+}
+
+func sourceBoost(source *string, mode string) float64 {
+	if source == nil || *source == "" {
+		return 0
+	}
+
+	if mode == models.RetrievalStartup && strings.EqualFold(*source, "codex") {
+		return 0.05
+	}
+
+	return 0
 }
 
 // TieredSearch performs FTS-first tiered search that only calls embed when FTS results are sparse.

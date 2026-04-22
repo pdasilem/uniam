@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"uniam/internal/config"
 	"uniam/internal/models"
 )
 
@@ -14,13 +15,26 @@ func stringPtr(s string) *string {
 // --- Stub implementation of uniamService ---
 
 type stubService struct {
-	storeResult    map[string]any
-	storeErr       error
-	searchResults  []models.SearchResult
-	searchErr      error
-	contextResults []models.SearchResult
-	contextTotal   int64
-	contextErr     error
+	storeResult     map[string]any
+	storeErr        error
+	searchResults   []models.SearchResult
+	searchErr       error
+	contextResults  []models.SearchResult
+	contextTotal    int64
+	contextErr      error
+	retrieveResult  map[string]any
+	retrieveErr     error
+	archiveResult   map[string]any
+	archiveErr      error
+	supersedeResult map[string]any
+	supersedeErr    error
+	updateResult    map[string]any
+	updateErr       error
+	compactResult   map[string]any
+	compactErr      error
+	explain         *models.SearchExplanation
+	explainResults  []models.SearchResult
+	explainErr      error
 }
 
 //nolint:revive
@@ -38,7 +52,27 @@ func (s *stubService) GetContext(limit int, project *string, source *string, que
 	return s.contextResults, s.contextTotal, s.contextErr
 }
 
-func (s *stubService) Close() error { return nil }
+func (s *stubService) Retrieve(itemID string, project string) (map[string]any, error) {
+	return s.retrieveResult, s.retrieveErr
+}
+func (s *stubService) ArchiveInProject(itemID string, project string) (map[string]any, error) {
+	return s.archiveResult, s.archiveErr
+}
+func (s *stubService) SupersedeInProject(itemID string, project string, supersededBy string) (map[string]any, error) {
+	return s.supersedeResult, s.supersedeErr
+}
+func (s *stubService) UpdateInProject(itemID string, project string, input models.ItemUpdateInput) (map[string]any, error) {
+	return s.updateResult, s.updateErr
+}
+func (s *stubService) Compact(summary models.RawItemInput, project string, query string, source *string, limit int, category *string) (map[string]any, error) {
+	return s.compactResult, s.compactErr
+}
+func (s *stubService) ExplainSearchWithMode(query string, limit int, project *string, source *string, useVectors bool, mode string) (*models.SearchExplanation, []models.SearchResult, error) {
+	return s.explain, s.explainResults, s.explainErr
+}
+
+func (s *stubService) Config() *config.Config { return &config.Config{} }
+func (s *stubService) Close() error           { return nil }
 
 // --- HandleUniamStore tests ---
 
@@ -165,7 +199,26 @@ func (c *capturingStub) Search(_ string, _ int, _ *string, _ *string, _ bool) ([
 func (c *capturingStub) GetContext(_ int, _ *string, _ *string, _ *string, _ string, _ bool) ([]models.SearchResult, int64, error) {
 	return nil, 0, nil
 }
-func (c *capturingStub) Close() error { return nil }
+func (c *capturingStub) Retrieve(_ string, _ string) (map[string]any, error) {
+	return nil, nil
+}
+func (c *capturingStub) ArchiveInProject(_ string, _ string) (map[string]any, error) {
+	return nil, nil
+}
+func (c *capturingStub) SupersedeInProject(_ string, _ string, _ string) (map[string]any, error) {
+	return nil, nil
+}
+func (c *capturingStub) UpdateInProject(_ string, _ string, _ models.ItemUpdateInput) (map[string]any, error) {
+	return nil, nil
+}
+func (c *capturingStub) Compact(_ models.RawItemInput, _ string, _ string, _ *string, _ int, _ *string) (map[string]any, error) {
+	return nil, nil
+}
+func (c *capturingStub) ExplainSearchWithMode(_ string, _ int, _ *string, _ *string, _ bool, _ string) (*models.SearchExplanation, []models.SearchResult, error) {
+	return nil, nil, nil
+}
+func (c *capturingStub) Config() *config.Config { return &config.Config{} }
+func (c *capturingStub) Close() error           { return nil }
 
 // --- HandleUniamSearch tests ---
 
@@ -227,6 +280,18 @@ func TestHandleUniamSearch_WithResults(t *testing.T) {
 
 	if results[0]["score"] != 0.95 {
 		t.Errorf("score = %v, want 0.95", results[0]["score"])
+	}
+}
+
+func TestHandleUniamSearch_RejectsCrossProjectParam(t *testing.T) {
+	svc := &stubService{}
+
+	_, err := HandleUniamSearch(svc, map[string]any{
+		"query":   "decision",
+		"project": "other-project",
+	})
+	if err == nil {
+		t.Fatal("HandleUniamSearch() should reject cross-project access")
 	}
 }
 
@@ -294,6 +359,7 @@ func TestHandleUniamContext_PropagatesError(t *testing.T) {
 
 type contextCapturingStub struct {
 	lastLimit int
+	lastProj  *string
 	onContext func(int)
 }
 
@@ -304,15 +370,248 @@ func (c *contextCapturingStub) Store(raw models.RawItemInput, project string) (m
 func (c *contextCapturingStub) Search(_ string, _ int, _ *string, _ *string, _ bool) ([]models.SearchResult, error) {
 	return nil, nil
 }
-func (c *contextCapturingStub) GetContext(limit int, _ *string, _ *string, _ *string, _ string, _ bool) ([]models.SearchResult, int64, error) {
+func (c *contextCapturingStub) GetContext(limit int, project *string, _ *string, _ *string, _ string, _ bool) ([]models.SearchResult, int64, error) {
 	c.lastLimit = limit
+	c.lastProj = project
 	if c.onContext != nil {
 		c.onContext(limit)
 	}
 
 	return []models.SearchResult{}, 0, nil
 }
-func (c *contextCapturingStub) Close() error { return nil }
+func (c *contextCapturingStub) Retrieve(_ string, _ string) (map[string]any, error) {
+	return nil, nil
+}
+func (c *contextCapturingStub) ArchiveInProject(_ string, _ string) (map[string]any, error) {
+	return nil, nil
+}
+func (c *contextCapturingStub) SupersedeInProject(_ string, _ string, _ string) (map[string]any, error) {
+	return nil, nil
+}
+func (c *contextCapturingStub) UpdateInProject(_ string, _ string, _ models.ItemUpdateInput) (map[string]any, error) {
+	return nil, nil
+}
+func (c *contextCapturingStub) Compact(_ models.RawItemInput, _ string, _ string, _ *string, _ int, _ *string) (map[string]any, error) {
+	return nil, nil
+}
+func (c *contextCapturingStub) ExplainSearchWithMode(_ string, _ int, _ *string, _ *string, _ bool, _ string) (*models.SearchExplanation, []models.SearchResult, error) {
+	return nil, nil, nil
+}
+func (c *contextCapturingStub) Config() *config.Config { return &config.Config{} }
+func (c *contextCapturingStub) Close() error           { return nil }
+
+func TestHandleUniamContext_ForcesCurrentProject(t *testing.T) {
+	svc := &contextCapturingStub{}
+
+	_, err := HandleUniamContext(svc, map[string]any{})
+	if err != nil {
+		t.Fatalf("HandleUniamContext() error = %v", err)
+	}
+
+	if svc.lastProj == nil {
+		t.Fatal("expected project to be passed to GetContext")
+	}
+
+	if *svc.lastProj != currentProjectName() {
+		t.Fatalf("project = %q, want %q", *svc.lastProj, currentProjectName())
+	}
+}
+
+func TestHandleUniamContext_RejectsCrossProjectParam(t *testing.T) {
+	svc := &stubService{}
+
+	_, err := HandleUniamContext(svc, map[string]any{"project": "other-project"})
+	if err == nil {
+		t.Fatal("HandleUniamContext() should reject cross-project access")
+	}
+}
+
+func TestHandleUniamStore_RejectsCrossProjectParam(t *testing.T) {
+	svc := &stubService{}
+
+	_, err := HandleUniamStore(svc, map[string]any{
+		"title":   "T",
+		"what":    "W",
+		"project": "other-project",
+	})
+	if err == nil {
+		t.Fatal("HandleUniamStore() should reject cross-project access")
+	}
+}
+
+func TestHandleUniamRetrieve_Success(t *testing.T) {
+	svc := &stubService{
+		retrieveResult: map[string]any{
+			"id":      "note-1",
+			"project": currentProjectName(),
+			"title":   "Decision",
+		},
+	}
+
+	result, err := HandleUniamRetrieve(svc, map[string]any{"id": "note-1"})
+	if err != nil {
+		t.Fatalf("HandleUniamRetrieve() error = %v", err)
+	}
+
+	if result["id"] != "note-1" {
+		t.Fatalf("id = %v, want note-1", result["id"])
+	}
+}
+
+func TestHandleUniamRetrieve_RejectsCrossProjectParam(t *testing.T) {
+	svc := &stubService{}
+
+	_, err := HandleUniamRetrieve(svc, map[string]any{
+		"id":      "note-1",
+		"project": "other-project",
+	})
+	if err == nil {
+		t.Fatal("HandleUniamRetrieve() should reject cross-project access")
+	}
+}
+
+func TestHandleUniamArchive_Success(t *testing.T) {
+	svc := &stubService{
+		archiveResult: map[string]any{"id": "note-1", "action": "archived"},
+	}
+
+	result, err := HandleUniamArchive(svc, map[string]any{"id": "note-1"})
+	if err != nil {
+		t.Fatalf("HandleUniamArchive() error = %v", err)
+	}
+	if result["action"] != "archived" {
+		t.Fatalf("action = %v, want archived", result["action"])
+	}
+}
+
+func TestHandleUniamArchive_RejectsCrossProjectParam(t *testing.T) {
+	svc := &stubService{}
+
+	_, err := HandleUniamArchive(svc, map[string]any{"id": "note-1", "project": "other-project"})
+	if err == nil {
+		t.Fatal("HandleUniamArchive() should reject cross-project access")
+	}
+}
+
+func TestHandleUniamSupersede_Success(t *testing.T) {
+	svc := &stubService{
+		supersedeResult: map[string]any{"id": "old-note", "action": "superseded", "superseded_by": "new-note"},
+	}
+
+	result, err := HandleUniamSupersede(svc, map[string]any{"id": "old-note", "by": "new-note"})
+	if err != nil {
+		t.Fatalf("HandleUniamSupersede() error = %v", err)
+	}
+	if result["action"] != "superseded" {
+		t.Fatalf("action = %v, want superseded", result["action"])
+	}
+}
+
+func TestHandleUniamSupersede_RejectsCrossProjectParam(t *testing.T) {
+	svc := &stubService{}
+
+	_, err := HandleUniamSupersede(svc, map[string]any{"id": "old-note", "by": "new-note", "project": "other-project"})
+	if err == nil {
+		t.Fatal("HandleUniamSupersede() should reject cross-project access")
+	}
+}
+
+func TestHandleUniamUpdateNote_Success(t *testing.T) {
+	svc := &stubService{
+		updateResult: map[string]any{"id": "note-1", "action": "updated"},
+	}
+
+	result, err := HandleUniamUpdateNote(svc, map[string]any{
+		"id":   "note-1",
+		"what": "new what",
+		"tags": []any{"a", "b"},
+	})
+	if err != nil {
+		t.Fatalf("HandleUniamUpdateNote() error = %v", err)
+	}
+	if result["action"] != "updated" {
+		t.Fatalf("action = %v, want updated", result["action"])
+	}
+}
+
+func TestHandleUniamUpdateNote_RejectsCrossProjectParam(t *testing.T) {
+	svc := &stubService{}
+
+	_, err := HandleUniamUpdateNote(svc, map[string]any{"id": "note-1", "what": "x", "project": "other-project"})
+	if err == nil {
+		t.Fatal("HandleUniamUpdateNote() should reject cross-project access")
+	}
+}
+
+func TestHandleUniamCompact_Success(t *testing.T) {
+	svc := &stubService{
+		compactResult: map[string]any{"id": "canon-1", "action": "created", "covered_count": 3},
+	}
+
+	result, err := HandleUniamCompact(svc, map[string]any{
+		"title": "Canonical summary",
+		"what":  "These notes say the same thing",
+		"query": "token",
+	})
+	if err != nil {
+		t.Fatalf("HandleUniamCompact() error = %v", err)
+	}
+	if result["id"] != "canon-1" {
+		t.Fatalf("id = %v, want canon-1", result["id"])
+	}
+}
+
+func TestHandleUniamCompact_RejectsCrossProjectParam(t *testing.T) {
+	svc := &stubService{}
+
+	_, err := HandleUniamCompact(svc, map[string]any{
+		"title":   "Canonical summary",
+		"what":    "These notes say the same thing",
+		"query":   "token",
+		"project": "other-project",
+	})
+	if err == nil {
+		t.Fatal("HandleUniamCompact() should reject cross-project access")
+	}
+}
+
+func TestHandleUniamExplainSearch_Success(t *testing.T) {
+	svc := &stubService{
+		explain: &models.SearchExplanation{
+			Query:           "needle",
+			Mode:            models.RetrievalSearch,
+			ReturnedResults: 1,
+		},
+		explainResults: []models.SearchResult{
+			{ID: "note-1", Title: "Decision", Project: currentProjectName(), Score: 0.9, Status: models.StatusActive},
+		},
+	}
+
+	result, err := HandleUniamExplainSearch(svc, map[string]any{"query": "needle"})
+	if err != nil {
+		t.Fatalf("HandleUniamExplainSearch() error = %v", err)
+	}
+
+	if _, ok := result["explanation"].(*models.SearchExplanation); !ok {
+		t.Fatalf("explanation type = %T, want *models.SearchExplanation", result["explanation"])
+	}
+	results, ok := result["results"].([]map[string]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("results = %#v, want one result", result["results"])
+	}
+}
+
+func TestHandleUniamExplainSearch_RejectsCrossProjectParam(t *testing.T) {
+	svc := &stubService{}
+
+	_, err := HandleUniamExplainSearch(svc, map[string]any{
+		"query":   "needle",
+		"project": "other-project",
+	})
+	if err == nil {
+		t.Fatal("HandleUniamExplainSearch() should reject cross-project access")
+	}
+}
 
 // --- getStringSliceFromMap tests ---
 

@@ -3,15 +3,21 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"uniam/internal/buildinfo"
+	"uniam/internal/config"
 	"uniam/internal/core"
 	"uniam/internal/models"
+	"uniam/internal/update"
 )
 
 // uniamService is the subset of core.Service used by MCP tool handlers.
@@ -20,6 +26,13 @@ type uniamService interface {
 	Store(raw models.RawItemInput, project string) (map[string]any, error)
 	Search(query string, limit int, project *string, source *string, useVectors bool) ([]models.SearchResult, error)
 	GetContext(limit int, project *string, source *string, query *string, semanticMode string, topupRecent bool) ([]models.SearchResult, int64, error)
+	Retrieve(itemID string, project string) (map[string]any, error)
+	ArchiveInProject(itemID string, project string) (map[string]any, error)
+	SupersedeInProject(itemID string, project string, supersededBy string) (map[string]any, error)
+	UpdateInProject(itemID string, project string, input models.ItemUpdateInput) (map[string]any, error)
+	Compact(summary models.RawItemInput, project string, query string, source *string, limit int, category *string) (map[string]any, error)
+	ExplainSearchWithMode(query string, limit int, project *string, source *string, useVectors bool, mode string) (*models.SearchExplanation, []models.SearchResult, error)
+	Config() *config.Config
 	Close() error
 }
 
@@ -32,10 +45,30 @@ func RunServer() error {
 
 	defer func() { _ = svc.Close() }()
 
+	cfg := svc.Config()
+	if cfg.Updates.CheckOnMCPStart {
+		checker := update.NewChecker(buildinfo.Version).WithCheckTTL(time.Duration(cfg.Updates.CheckIntervalHours) * time.Hour)
+		if result, checkErr := checker.Check(context.Background(), false); checkErr == nil {
+			if result.UpdateAvailable {
+				if cfg.Updates.AutoApply && runtime.GOOS != "windows" {
+					if applyErr := checker.Apply(context.Background(), result); applyErr == nil {
+						fmt.Fprintf(os.Stderr, "uniam: applied update %s -> %s; restart the agent to use the new binary\n", result.CurrentVersion, result.LatestVersion)
+					} else {
+						fmt.Fprintf(os.Stderr, "uniam: update available %s -> %s (auto-apply failed: %v)\n", result.CurrentVersion, result.LatestVersion, applyErr)
+					}
+				} else if cfg.Updates.AutoApply && runtime.GOOS == "windows" {
+					fmt.Fprintf(os.Stderr, "uniam: update available %s -> %s; auto-apply is disabled on windows, run `uniam update`\n", result.CurrentVersion, result.LatestVersion)
+				} else {
+					fmt.Fprintf(os.Stderr, "uniam: update available %s -> %s; run `uniam update`\n", result.CurrentVersion, result.LatestVersion)
+				}
+			}
+		}
+	}
+
 	// Create MCP server
 	mcpServer := mcpsdk.NewServer(&mcpsdk.Implementation{
 		Name:    "uniam",
-		Version: "0.1.0",
+		Version: buildinfo.Version,
 	}, nil)
 
 	// Register tools
@@ -145,6 +178,192 @@ func registerTools(s *mcpsdk.Server, svc uniamService) error {
 		},
 	}, contextHandler)
 
+	// Register uniam_retrieve tool
+	//nolint:revive
+	retrieveHandler := func(ctx context.Context, req *mcpsdk.CallToolRequest, input map[string]any) (*mcpsdk.CallToolResult, map[string]any, error) {
+		result, err := HandleUniamRetrieve(svc, input)
+		if err != nil {
+			return &mcpsdk.CallToolResult{
+				Content: []mcpsdk.Content{
+					&mcpsdk.TextContent{Text: fmt.Sprintf("Error: %v", err)},
+				},
+				IsError: true,
+			}, nil, nil
+		}
+
+		return nil, result, nil
+	}
+	mcpsdk.AddTool(s, &mcpsdk.Tool{
+		Name:        "uniam_retrieve",
+		Description: "Retrieve the full contents of a note from the current project only.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":      map[string]any{"type": "string", "description": "Full note ID"},
+				"project": map[string]any{"type": "string", "description": "Must match the current project if provided"},
+			},
+			"required": []string{"id"},
+		},
+	}, retrieveHandler)
+
+	// Register uniam_archive tool
+	//nolint:revive
+	archiveHandler := func(ctx context.Context, req *mcpsdk.CallToolRequest, input map[string]any) (*mcpsdk.CallToolResult, map[string]any, error) {
+		result, err := HandleUniamArchive(svc, input)
+		if err != nil {
+			return &mcpsdk.CallToolResult{
+				Content: []mcpsdk.Content{
+					&mcpsdk.TextContent{Text: fmt.Sprintf("Error: %v", err)},
+				},
+				IsError: true,
+			}, nil, nil
+		}
+
+		return nil, result, nil
+	}
+	mcpsdk.AddTool(s, &mcpsdk.Tool{
+		Name:        "uniam_archive",
+		Description: "Archive a note from the current project only.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":      map[string]any{"type": "string", "description": "Note ID or unique prefix in the current project"},
+				"project": map[string]any{"type": "string", "description": "Must match the current project if provided"},
+			},
+			"required": []string{"id"},
+		},
+	}, archiveHandler)
+
+	// Register uniam_supersede tool
+	//nolint:revive
+	supersedeHandler := func(ctx context.Context, req *mcpsdk.CallToolRequest, input map[string]any) (*mcpsdk.CallToolResult, map[string]any, error) {
+		result, err := HandleUniamSupersede(svc, input)
+		if err != nil {
+			return &mcpsdk.CallToolResult{
+				Content: []mcpsdk.Content{
+					&mcpsdk.TextContent{Text: fmt.Sprintf("Error: %v", err)},
+				},
+				IsError: true,
+			}, nil, nil
+		}
+
+		return nil, result, nil
+	}
+	mcpsdk.AddTool(s, &mcpsdk.Tool{
+		Name:        "uniam_supersede",
+		Description: "Mark a note as superseded by another note from the current project only.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":      map[string]any{"type": "string", "description": "Note ID or unique prefix in the current project"},
+				"by":      map[string]any{"type": "string", "description": "Replacement note ID or unique prefix in the current project"},
+				"project": map[string]any{"type": "string", "description": "Must match the current project if provided"},
+			},
+			"required": []string{"id", "by"},
+		},
+	}, supersedeHandler)
+
+	// Register uniam_update_note tool
+	//nolint:revive
+	updateHandler := func(ctx context.Context, req *mcpsdk.CallToolRequest, input map[string]any) (*mcpsdk.CallToolResult, map[string]any, error) {
+		result, err := HandleUniamUpdateNote(svc, input)
+		if err != nil {
+			return &mcpsdk.CallToolResult{
+				Content: []mcpsdk.Content{
+					&mcpsdk.TextContent{Text: fmt.Sprintf("Error: %v", err)},
+				},
+				IsError: true,
+			}, nil, nil
+		}
+
+		return nil, result, nil
+	}
+	mcpsdk.AddTool(s, &mcpsdk.Tool{
+		Name:        "uniam_update_note",
+		Description: "Update a note in the current project only.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":      map[string]any{"type": "string", "description": "Note ID or unique prefix in the current project"},
+				"what":    map[string]any{"type": "string", "description": "Replace the What field"},
+				"why":     map[string]any{"type": "string", "description": "Replace the Why field"},
+				"impact":  map[string]any{"type": "string", "description": "Replace the Impact field"},
+				"tags":    map[string]any{"type": []any{"string", "array"}, "items": map[string]any{"type": "string"}, "description": "Replace tags with a comma-separated string or array"},
+				"details": map[string]any{"type": "string", "description": "Append or create details content"},
+				"project": map[string]any{"type": "string", "description": "Must match the current project if provided"},
+			},
+			"required": []string{"id"},
+		},
+	}, updateHandler)
+
+	// Register uniam_compact tool
+	//nolint:revive
+	compactHandler := func(ctx context.Context, req *mcpsdk.CallToolRequest, input map[string]any) (*mcpsdk.CallToolResult, map[string]any, error) {
+		result, err := HandleUniamCompact(svc, input)
+		if err != nil {
+			return &mcpsdk.CallToolResult{
+				Content: []mcpsdk.Content{
+					&mcpsdk.TextContent{Text: fmt.Sprintf("Error: %v", err)},
+				},
+				IsError: true,
+			}, nil, nil
+		}
+
+		return nil, result, nil
+	}
+	mcpsdk.AddTool(s, &mcpsdk.Tool{
+		Name:        "uniam_compact",
+		Description: "Create a canonical summary note and archive matched notes inside the current project only.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"title":    map[string]any{"type": "string", "description": "Title of the canonical summary note"},
+				"what":     map[string]any{"type": "string", "description": "Summary statement for the canonical note"},
+				"why":      map[string]any{"type": "string", "description": "Why the compacted summary matters"},
+				"impact":   map[string]any{"type": "string", "description": "Impact of the compacted summary"},
+				"details":  map[string]any{"type": "string", "description": "Optional details to prepend before the generated covered-note list"},
+				"query":    map[string]any{"type": "string", "description": "Search query used to select notes for compaction"},
+				"source":   map[string]any{"type": "string", "description": "Restrict compaction to notes from a given source"},
+				"category": map[string]any{"type": "string", "description": "Restrict compaction to a given category"},
+				"limit":    map[string]any{"type": "integer", "description": "Maximum number of matching notes to compact", "default": 20},
+				"project":  map[string]any{"type": "string", "description": "Must match the current project if provided"},
+			},
+			"required": []string{"title", "what", "query"},
+		},
+	}, compactHandler)
+
+	// Register uniam_explain_search tool
+	//nolint:revive
+	explainHandler := func(ctx context.Context, req *mcpsdk.CallToolRequest, input map[string]any) (*mcpsdk.CallToolResult, map[string]any, error) {
+		result, err := HandleUniamExplainSearch(svc, input)
+		if err != nil {
+			return &mcpsdk.CallToolResult{
+				Content: []mcpsdk.Content{
+					&mcpsdk.TextContent{Text: fmt.Sprintf("Error: %v", err)},
+				},
+				IsError: true,
+			}, nil, nil
+		}
+
+		return nil, result, nil
+	}
+	mcpsdk.AddTool(s, &mcpsdk.Tool{
+		Name:        "uniam_explain_search",
+		Description: "Explain retrieval behavior for a search query inside the current project only.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query":   map[string]any{"type": "string", "description": "Search query"},
+				"limit":   map[string]any{"type": "integer", "description": "Maximum number of results", "default": 5},
+				"vectors": map[string]any{"type": "boolean", "description": "Allow vector search when available", "default": true},
+				"mode":    map[string]any{"type": "string", "description": "Retrieval mode: startup, search, debug, architecture, maintenance", "default": "search"},
+				"project": map[string]any{"type": "string", "description": "Must match the current project if provided"},
+				"source":  map[string]any{"type": "string", "description": "Filter by source"},
+			},
+			"required": []string{"query"},
+		},
+	}, explainHandler)
+
 	return nil
 }
 
@@ -159,10 +378,9 @@ func HandleUniamStore(svc uniamService, params map[string]any) (map[string]any, 
 	relatedFiles, _ := getStringSliceFromMap(params, "related_files")
 	details, _ := getStringFromMap(params, "details")
 	source, _ := getStringFromMap(params, "source")
-	project, _ := getStringFromMap(params, "project")
-
-	if project == "" {
-		project = filepath.Base(getCurrentDir())
+	project, err := resolveScopedProject(params)
+	if err != nil {
+		return nil, err
 	}
 
 	raw := models.RawItemInput{
@@ -210,10 +428,11 @@ func HandleUniamSearch(svc uniamService, params map[string]any) ([]map[string]an
 		limit = int(l)
 	}
 
-	var project *string
-	if p, ok := params["project"].(string); ok && p != "" {
-		project = &p
+	projectName, err := resolveScopedProject(params)
+	if err != nil {
+		return nil, err
 	}
+	project := &projectName
 
 	results, err := svc.Search(query, limit, project, nil, true)
 	if err != nil {
@@ -241,6 +460,187 @@ func HandleUniamSearch(svc uniamService, params map[string]any) ([]map[string]an
 	return clean, nil
 }
 
+// HandleUniamRetrieve handles the uniam_retrieve tool call.
+func HandleUniamRetrieve(svc uniamService, params map[string]any) (map[string]any, error) {
+	itemID, _ := getStringFromMap(params, "id")
+	if itemID == "" {
+		return nil, errors.New("id is required")
+	}
+
+	project, err := resolveScopedProject(params)
+	if err != nil {
+		return nil, err
+	}
+
+	return svc.Retrieve(itemID, project)
+}
+
+// HandleUniamArchive handles the uniam_archive tool call.
+func HandleUniamArchive(svc uniamService, params map[string]any) (map[string]any, error) {
+	itemID, _ := getStringFromMap(params, "id")
+	if itemID == "" {
+		return nil, errors.New("id is required")
+	}
+
+	project, err := resolveScopedProject(params)
+	if err != nil {
+		return nil, err
+	}
+
+	return svc.ArchiveInProject(itemID, project)
+}
+
+// HandleUniamSupersede handles the uniam_supersede tool call.
+func HandleUniamSupersede(svc uniamService, params map[string]any) (map[string]any, error) {
+	itemID, _ := getStringFromMap(params, "id")
+	if itemID == "" {
+		return nil, errors.New("id is required")
+	}
+	by, _ := getStringFromMap(params, "by")
+	if by == "" {
+		return nil, errors.New("by is required")
+	}
+
+	project, err := resolveScopedProject(params)
+	if err != nil {
+		return nil, err
+	}
+
+	return svc.SupersedeInProject(itemID, project, by)
+}
+
+// HandleUniamUpdateNote handles the uniam_update_note tool call.
+func HandleUniamUpdateNote(svc uniamService, params map[string]any) (map[string]any, error) {
+	itemID, _ := getStringFromMap(params, "id")
+	if itemID == "" {
+		return nil, errors.New("id is required")
+	}
+
+	project, err := resolveScopedProject(params)
+	if err != nil {
+		return nil, err
+	}
+
+	input := models.ItemUpdateInput{}
+	if what, ok := getStringFromMap(params, "what"); ok && what != "" {
+		input.What = &what
+	}
+	if why, ok := getStringFromMap(params, "why"); ok && why != "" {
+		input.Why = &why
+	}
+	if impact, ok := getStringFromMap(params, "impact"); ok && impact != "" {
+		input.Impact = &impact
+	}
+	if details, ok := getStringFromMap(params, "details"); ok && details != "" {
+		input.Details = &details
+	}
+	if tags, ok := getStringSliceFromMap(params, "tags"); ok {
+		input.Tags = tags
+	}
+
+	return svc.UpdateInProject(itemID, project, input)
+}
+
+// HandleUniamCompact handles the uniam_compact tool call.
+func HandleUniamCompact(svc uniamService, params map[string]any) (map[string]any, error) {
+	project, err := resolveScopedProject(params)
+	if err != nil {
+		return nil, err
+	}
+
+	title, _ := getStringFromMap(params, "title")
+	what, _ := getStringFromMap(params, "what")
+	query, _ := getStringFromMap(params, "query")
+	if title == "" || what == "" || query == "" {
+		return nil, errors.New("title, what, and query are required")
+	}
+
+	raw := models.RawItemInput{Title: title, What: what, IsCanonical: true}
+	if why, ok := getStringFromMap(params, "why"); ok && why != "" {
+		raw.Why = &why
+	}
+	if impact, ok := getStringFromMap(params, "impact"); ok && impact != "" {
+		raw.Impact = &impact
+	}
+	if details, ok := getStringFromMap(params, "details"); ok && details != "" {
+		raw.Details = &details
+	}
+
+	var source *string
+	if sourceValue, ok := getStringFromMap(params, "source"); ok && sourceValue != "" {
+		source = &sourceValue
+	}
+
+	var category *string
+	if categoryValue, ok := getStringFromMap(params, "category"); ok && categoryValue != "" {
+		category = &categoryValue
+	}
+
+	limit := 20
+	if l, ok := params["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	return svc.Compact(raw, project, query, source, limit, category)
+}
+
+// HandleUniamExplainSearch handles the uniam_explain_search tool call.
+func HandleUniamExplainSearch(svc uniamService, params map[string]any) (map[string]any, error) {
+	query, _ := getStringFromMap(params, "query")
+	if query == "" {
+		return nil, errors.New("query is required")
+	}
+
+	projectName, err := resolveScopedProject(params)
+	if err != nil {
+		return nil, err
+	}
+	project := &projectName
+
+	limit := 5
+	if l, ok := params["limit"].(float64); ok {
+		limit = int(l)
+	}
+
+	useVectors := true
+	if vectors, ok := params["vectors"].(bool); ok {
+		useVectors = vectors
+	}
+
+	mode := models.RetrievalSearch
+	if modeValue, ok := getStringFromMap(params, "mode"); ok && modeValue != "" {
+		mode = modeValue
+	}
+
+	var source *string
+	if sourceValue, ok := getStringFromMap(params, "source"); ok && sourceValue != "" {
+		source = &sourceValue
+	}
+
+	explanation, results, err := svc.ExplainSearchWithMode(query, limit, project, source, useVectors, mode)
+	if err != nil {
+		return nil, err
+	}
+
+	clean := make([]map[string]any, len(results))
+	for i, result := range results {
+		clean[i] = map[string]any{
+			"id":           result.ID,
+			"title":        result.Title,
+			"project":      result.Project,
+			"score":        result.Score,
+			"status":       result.Status,
+			"is_canonical": result.IsCanonical,
+			"has_details":  result.HasDetails,
+		}
+	}
+
+	return map[string]any{
+		"explanation": explanation,
+		"results":     clean,
+	}, nil
+}
+
 // HandleUniamContext handles the uniam_context tool call.
 func HandleUniamContext(svc uniamService, params map[string]any) (map[string]any, error) {
 	limit := 10
@@ -248,13 +648,11 @@ func HandleUniamContext(svc uniamService, params map[string]any) (map[string]any
 		limit = int(l)
 	}
 
-	var project *string
-	if p, ok := params["project"].(string); ok && p != "" {
-		project = &p
-	} else {
-		proj := filepath.Base(getCurrentDir())
-		project = &proj
+	projectName, err := resolveScopedProject(params)
+	if err != nil {
+		return nil, err
 	}
+	project := &projectName
 
 	results, total, err := svc.GetContext(limit, project, nil, nil, "never", false)
 	if err != nil {
@@ -345,4 +743,17 @@ func getCurrentDir() string {
 	}
 
 	return dir
+}
+
+func currentProjectName() string {
+	return filepath.Base(getCurrentDir())
+}
+
+func resolveScopedProject(params map[string]any) (string, error) {
+	current := currentProjectName()
+	if project, ok := params["project"].(string); ok && project != "" && project != current {
+		return "", fmt.Errorf("cross-project access is not allowed: current project is %s", current)
+	}
+
+	return current, nil
 }

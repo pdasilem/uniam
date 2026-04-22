@@ -30,7 +30,7 @@ func runAgentCmd(agent string, handlers map[string]agentFunc, configDir string, 
 	}
 
 	fastContext := false
-	if isSetup && agent != "windsurf" {
+	if isSetup && agent != "windsurf" && agent != "opencode" {
 		fmt.Print("install fast context? yes/no (default no): ")
 		reader := bufio.NewReader(os.Stdin)
 		response, _ := reader.ReadString('\n')
@@ -65,7 +65,10 @@ var setupCmd = &cobra.Command{
 			"codex-cli":   setupCodex,
 			"copilot":     setupCopilot,
 			"gemini-cli":  setupGeminiCli,
-			"opencode": func(_ string, project bool, fast bool) (map[string]string, error) {
+			"opencode": func(configDir string, project bool, fast bool) (map[string]string, error) {
+				if configDir != "" {
+					return nil, errors.New("OpenCode setup does not support --config-dir. It installs only to ~/.config/opencode")
+				}
 				return setupOpenCode(project, fast)
 			},
 			"roo":     setupRooCode,
@@ -90,9 +93,14 @@ var uninstallCmd = &cobra.Command{
 			"codex-cli":   uninstallCodex,
 			"copilot":     uninstallCopilot,
 			"gemini-cli":  uninstallGeminiCli,
-			"opencode":    func(_ string, project bool, _ bool) (map[string]string, error) { return uninstallOpenCode(project) },
-			"roo":         uninstallRooCode,
-			"roocode":     uninstallRooCode,
+			"opencode": func(configDir string, project bool, _ bool) (map[string]string, error) {
+				if configDir != "" {
+					return nil, errors.New("OpenCode uninstall does not support --config-dir. It removes only from ~/.config/opencode")
+				}
+				return uninstallOpenCode(project)
+			},
+			"roo":     uninstallRooCode,
+			"roocode": uninstallRooCode,
 		}, setupConfigDir, setupProject, false)
 	},
 }
@@ -118,6 +126,78 @@ func resolveConfigDir(agentDotDir string, configDir string, project bool) string
 	home, _ := os.UserHomeDir()
 
 	return filepath.Join(home, agentDotDir)
+}
+
+func openCodeConfigRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve home directory: %w", err)
+	}
+
+	return filepath.Join(home, ".config", "opencode"), nil
+}
+
+func readJSONMap(path string) (map[string]any, error) {
+	if data, err := os.ReadFile(path); err == nil {
+		var config map[string]any
+		if err := json.Unmarshal(data, &config); err != nil {
+			return nil, fmt.Errorf("failed to parse existing config: %w", err)
+		}
+
+		return config, nil
+	}
+
+	return make(map[string]any), nil
+}
+
+func writeJSONMap(path string, config map[string]any) error {
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	return nil
+}
+
+func appendUniqueString(values []string, target string) []string {
+	for _, value := range values {
+		if value == target {
+			return values
+		}
+	}
+
+	return append(values, target)
+}
+
+func installOpenCodeInstructions(target string) error {
+	path := filepath.Join(target, openCodeInstructionsFileName)
+	return os.WriteFile(path, openCodeInstructionsContent, 0644)
+}
+
+func installOpenCodePlugin(target string) error {
+	pluginsDir := filepath.Join(target, "plugins")
+	if err := os.MkdirAll(pluginsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create OpenCode plugin directory: %w", err)
+	}
+
+	path := filepath.Join(pluginsDir, openCodePluginFileName)
+	return os.WriteFile(path, openCodePluginContent, 0644)
+}
+
+func removeFileIfExists(path string) (bool, error) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+
+	if err := os.Remove(path); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func addFastContextServers(mcpServers map[string]any) {
@@ -479,12 +559,13 @@ func setupCodex(configDir string, project bool, fastContext bool) (map[string]st
 	}
 
 	// Add to AGENTS.md (idempotent).
-	const uniamAgentsSection = "## Uniam\n\nYou have access to a persistent note storage system via Uniam. " +
-		"Use it to store important decisions, patterns, bugs, context, and learnings.\n\n" +
-		"### Commands\n" +
-		"- `uniam store` - Store a note\n" +
-		"- `uniam search` - Search notes\n" +
-		"- `uniam list` - List recent notes\n"
+	const uniamAgentsSection = "## Uniam\n\nUse Uniam for cross-session memory.\n\n" +
+		"Required:\n" +
+		"- Retrieve before meaningful work.\n" +
+		"- Checkpoint during long or decision-heavy work.\n" +
+		"- Store again before finishing meaningful work.\n" +
+		"- Curate stale or repetitive memory when needed.\n" +
+		"- Never operate outside the current project or folder scope.\n"
 
 	existingAgents, _ := os.ReadFile(agentsPath)
 	if !bytes.Contains(existingAgents, []byte("## Uniam")) {
@@ -507,24 +588,19 @@ func setupCodex(configDir string, project bool, fastContext bool) (map[string]st
 }
 
 func setupOpenCode(project bool, fastContext bool) (map[string]string, error) {
-	var configPath string
-
 	if project {
-		dir, _ := os.Getwd()
-		configPath = filepath.Join(dir, "opencode.json")
-	} else {
-		home, _ := os.UserHomeDir()
-		configPath = filepath.Join(home, ".config", "opencode", "opencode.json")
+		return nil, errors.New("OpenCode setup is global-only. Run `uniam setup opencode` without --project")
 	}
 
-	// Read existing config or create new
-	var config map[string]any
-	if data, err := os.ReadFile(configPath); err == nil {
-		if err := json.Unmarshal(data, &config); err != nil {
-			return nil, fmt.Errorf("failed to parse existing config: %w", err)
-		}
-	} else {
-		config = make(map[string]any)
+	target, err := openCodeConfigRoot()
+	if err != nil {
+		return nil, err
+	}
+
+	configPath := filepath.Join(target, "opencode.json")
+	config, err := readJSONMap(configPath)
+	if err != nil {
+		return nil, err
 	}
 
 	// OpenCode uses a "mcp" key (not "mcpServers"), and command must be an array.
@@ -533,29 +609,52 @@ func setupOpenCode(project bool, fastContext bool) (map[string]string, error) {
 		mcp = make(map[string]any)
 		config["mcp"] = mcp
 	}
-
 	mcp["uniam"] = map[string]any{
 		"type":    "local",
 		"command": []string{"uniam", "mcp"},
 	}
 
-	// Write config
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+	instructions, _ := config["instructions"].([]any)
+	if instructions == nil {
+		instructions = make([]any, 0, 1)
+	}
+	stringInstructions := make([]string, 0, len(instructions))
+	for _, instruction := range instructions {
+		value, ok := instruction.(string)
+		if ok {
+			stringInstructions = append(stringInstructions, value)
+		}
+	}
+	stringInstructions = appendUniqueString(stringInstructions, openCodeInstructionConfigRef)
+	normalizedInstructions := make([]any, 0, len(stringInstructions))
+	for _, instruction := range stringInstructions {
+		normalizedInstructions = append(normalizedInstructions, instruction)
+	}
+	config["instructions"] = normalizedInstructions
+
+	if err := os.MkdirAll(target, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal config: %w", err)
+	if err := installOpenCodeInstructions(target); err != nil {
+		return nil, fmt.Errorf("failed to write OpenCode instructions: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return nil, fmt.Errorf("failed to write config: %w", err)
+	if err := installOpenCodePlugin(target); err != nil {
+		return nil, fmt.Errorf("failed to write OpenCode plugin: %w", err)
 	}
 
-	msg := "Installed Uniam MCP server in " + configPath
+	if !installSkill(target) {
+		return nil, errors.New("failed to install OpenCode skill")
+	}
+
+	if err := writeJSONMap(configPath, config); err != nil {
+		return nil, err
+	}
+
+	msg := "Installed Uniam OpenCode integration in " + target
 	if fastContext {
-		msg += " with fast context"
+		msg += " (fast context ignored for OpenCode)"
 	}
 	return map[string]string{"message": msg}, nil
 }
@@ -755,28 +854,24 @@ func uninstallCodex(configDir string, project bool, _ bool) (map[string]string, 
 }
 
 func uninstallOpenCode(project bool) (map[string]string, error) {
-	var configPath string
-
 	if project {
-		dir, _ := os.Getwd()
-		configPath = filepath.Join(dir, "opencode.json")
-	} else {
-		home, _ := os.UserHomeDir()
-		configPath = filepath.Join(home, ".config", "opencode", "opencode.json")
+		return nil, errors.New("OpenCode uninstall is global-only. Run `uniam uninstall opencode` without --project")
 	}
 
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return map[string]string{"message": "Uniam not found in OpenCode config"}, nil
-	}
-
-	data, err := os.ReadFile(configPath)
+	target, err := openCodeConfigRoot()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config: %w", err)
+		return nil, err
 	}
 
-	var config map[string]any
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
+	configPath := filepath.Join(target, "opencode.json")
+	_, statErr := os.Stat(configPath)
+	configExists := !errors.Is(statErr, os.ErrNotExist)
+	config := make(map[string]any)
+	if configExists {
+		config, err = readJSONMap(configPath)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if mcp, ok := config["mcp"].(map[string]any); ok {
@@ -785,17 +880,35 @@ func uninstallOpenCode(project bool) (map[string]string, error) {
 		delete(mcp, "code-search")
 	}
 
-	newData, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal config: %w", err)
+	if instructions, ok := config["instructions"].([]any); ok {
+		filtered := make([]any, 0, len(instructions))
+		for _, instruction := range instructions {
+			value, ok := instruction.(string)
+			if ok && value == openCodeInstructionConfigRef {
+				continue
+			}
+
+			filtered = append(filtered, instruction)
+		}
+		if len(filtered) == 0 {
+			delete(config, "instructions")
+		} else {
+			config["instructions"] = filtered
+		}
 	}
 
-	if err := os.WriteFile(configPath, newData, 0644); err != nil {
-		return nil, fmt.Errorf("failed to write config: %w", err)
+	if configExists {
+		if err := writeJSONMap(configPath, config); err != nil {
+			return nil, err
+		}
 	}
+
+	_, _ = removeFileIfExists(filepath.Join(target, openCodeInstructionsFileName))
+	_, _ = removeFileIfExists(filepath.Join(target, "plugins", openCodePluginFileName))
+	_ = uninstallSkill(target)
 
 	return map[string]string{
-		"message": "Removed Uniam from " + configPath,
+		"message": "Removed Uniam OpenCode integration from " + target,
 	}, nil
 }
 

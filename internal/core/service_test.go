@@ -172,3 +172,252 @@ func TestService_Remove(t *testing.T) {
 		t.Error("Remove() should return false for non-existent item")
 	}
 }
+
+func TestService_Archive_HidesItemFromSearch(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svc, err := NewService(tmpDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	defer svc.Close()
+
+	raw := models.RawItemInput{
+		Title: "Archive Me",
+		What:  "archive-specific-token",
+	}
+
+	result, err := svc.Store(raw, "test-project")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	resultID, _ := result["id"].(string)
+	if _, err := svc.Archive(resultID); err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+
+	results, err := svc.Search("archive-specific-token", 5, nil, nil, false)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if len(results) != 0 {
+		t.Fatalf("expected archived item to be hidden from active search, got %d results", len(results))
+	}
+}
+
+func TestService_Update_ChangesContent(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svc, err := NewService(tmpDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	defer svc.Close()
+
+	raw := models.RawItemInput{
+		Title: "Update Me",
+		What:  "old content",
+	}
+
+	result, err := svc.Store(raw, "test-project")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	resultID, _ := result["id"].(string)
+	newWhat := "new content token"
+
+	if _, err := svc.Update(resultID, models.ItemUpdateInput{What: &newWhat}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	results, err := svc.Search("new content token", 5, nil, nil, false)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+
+	if len(results) == 0 {
+		t.Fatal("expected updated item to be searchable by new content")
+	}
+}
+
+func TestService_Supersede_HidesItemFromRecentContext(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svc, err := NewService(tmpDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	defer svc.Close()
+
+	raw := models.RawItemInput{
+		Title: "Old Decision",
+		What:  "legacy token",
+	}
+
+	result, err := svc.Store(raw, "test-project")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	resultID, _ := result["id"].(string)
+
+	if _, err := svc.Supersede(resultID, "new-decision-id"); err != nil {
+		t.Fatalf("Supersede() error = %v", err)
+	}
+
+	results, _, err := svc.GetContext(10, nil, nil, nil, "never", false)
+	if err != nil {
+		t.Fatalf("GetContext() error = %v", err)
+	}
+
+	if len(results) != 0 {
+		t.Fatalf("expected superseded item to be hidden from active context, got %d results", len(results))
+	}
+}
+
+func TestService_GetContext_TotalReflectsActiveNotes(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svc, err := NewService(tmpDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	defer svc.Close()
+
+	first, err := svc.Store(models.RawItemInput{Title: "Active", What: "active token"}, "test-project")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	second, err := svc.Store(models.RawItemInput{Title: "Archive Later", What: "archive token"}, "test-project")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	secondID, _ := second["id"].(string)
+	if _, err := svc.Archive(secondID); err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+
+	_, total, err := svc.GetContext(10, nil, nil, nil, "never", false)
+	if err != nil {
+		t.Fatalf("GetContext() error = %v", err)
+	}
+
+	if total != 1 {
+		t.Fatalf("expected active total 1, got %d", total)
+	}
+
+	firstID, _ := first["id"].(string)
+	if firstID == "" {
+		t.Fatal("expected first note id")
+	}
+}
+
+func TestService_ExplainSearch_FTSMode(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svc, err := NewService(tmpDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	defer svc.Close()
+
+	if _, err := svc.Store(models.RawItemInput{Title: "Explain", What: "explain token"}, "test-project"); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	explanation, results, err := svc.ExplainSearch("explain token", 5, nil, nil, false)
+	if err != nil {
+		t.Fatalf("ExplainSearch() error = %v", err)
+	}
+
+	if explanation.Mode != "fts_only" {
+		t.Fatalf("expected fts_only mode, got %q", explanation.Mode)
+	}
+
+	if len(results) == 0 {
+		t.Fatal("expected explain search to return results")
+	}
+}
+
+func TestService_SearchWithMode_DebugBoostsBugNote(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svc, err := NewService(tmpDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	defer svc.Close()
+
+	bugCat := "bug"
+	contextCat := "context"
+	if _, err := svc.Store(models.RawItemInput{Title: "General Context", What: "shared token", Category: &contextCat}, "test-project"); err != nil {
+		t.Fatalf("Store() context error = %v", err)
+	}
+	if _, err := svc.Store(models.RawItemInput{Title: "Bug Fix", What: "shared token", Category: &bugCat}, "test-project"); err != nil {
+		t.Fatalf("Store() bug error = %v", err)
+	}
+
+	results, err := svc.SearchWithMode("shared token", 5, nil, nil, false, models.RetrievalDebug)
+	if err != nil {
+		t.Fatalf("SearchWithMode() error = %v", err)
+	}
+
+	if len(results) == 0 || results[0].Title != "Bug Fix" {
+		t.Fatalf("expected bug note first in debug mode, got %+v", results)
+	}
+}
+
+func TestService_Compact_CreatesCanonicalAndArchivesCoveredNotes(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svc, err := NewService(tmpDir)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	defer svc.Close()
+
+	patternCat := "pattern"
+	if _, err := svc.Store(models.RawItemInput{Title: "Pattern One", What: "compact token", Category: &patternCat}, "test-project"); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	if _, err := svc.Store(models.RawItemInput{Title: "Pattern Two", What: "compact token", Category: &patternCat}, "test-project"); err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	result, err := svc.Compact(models.RawItemInput{
+		Title: "Canonical Pattern Summary",
+		What:  "Summarized recurring pattern",
+	}, "test-project", "compact token", nil, 10, &patternCat)
+	if err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+
+	if result["covered_count"] != 2 {
+		t.Fatalf("expected covered_count=2, got %v", result["covered_count"])
+	}
+
+	results, _, err := svc.GetContextWithMode(10, nil, nil, nil, "never", false, models.RetrievalStartup)
+	if err != nil {
+		t.Fatalf("GetContextWithMode() error = %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected only canonical active note in context, got %d", len(results))
+	}
+
+	if !results[0].IsCanonical {
+		t.Fatalf("expected remaining note to be canonical")
+	}
+}

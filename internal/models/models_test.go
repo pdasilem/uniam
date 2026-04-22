@@ -27,6 +27,10 @@ func TestFromRaw(t *testing.T) {
 	if item.SectionAnchor == "" {
 		t.Error("FromRaw() SectionAnchor should not be empty")
 	}
+
+	if item.Status != StatusActive {
+		t.Errorf("FromRaw() Status = %q, want %q", item.Status, StatusActive)
+	}
 }
 
 func TestGenerateAnchor(t *testing.T) {

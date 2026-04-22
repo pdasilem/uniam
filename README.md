@@ -10,7 +10,7 @@ Local note storage for coding agents. Your agent keeps notes on decisions, bugs,
 ## Features
 
 - **Works with multiple agents** — Claude Code, Cursor, Windsurf, Antigravity, Codex, OpenCode, RooCode. One command sets up MCP config for your agent.
-- **MCP native** — Runs as an MCP server exposing `uniam_store`, `uniam_search`, and `uniam_context` as tools.
+- **MCP native** — Runs as an MCP server exposing project-scoped memory tools such as `uniam_context`, `uniam_search`, `uniam_retrieve`, `uniam_store`, `uniam_archive`, `uniam_supersede`, `uniam_update_note`, `uniam_compact`, and `uniam_explain_search`.
 - **Local-first** — Everything stays on your machine. Notes are stored as Markdown in `~/.uniam/shelves/`, readable in Obsidian or any editor.
 - **Zero idle cost** — No background processes, no daemon, no RAM overhead. The MCP server only runs when the agent starts it.
 - **Hybrid search** — FTS5 keyword search works out of the box. Add Ollama, OpenAI, or OpenRouter for semantic vector search.
@@ -70,9 +70,18 @@ uniam init
 uniam setup claude-code   # or: cursor, windsurf, antigravity, codex, codex-cli, opencode, roocode, copilot, gemini-cli
 ```
 
-During setup (except for Windsurf), you will be prompted to install **fast context MCP servers** (`ripgrep` and `code-search-mcp`). Answering "yes" will also add these powerful context retrieval plugins to your agent's configuration.
+During setup (except for Windsurf and OpenCode), you will be prompted to install **fast context MCP servers** (`ripgrep` and `code-search-mcp`). Answering "yes" will also add these powerful context retrieval plugins to your agent's configuration.
 
 This writes the MCP server entry into your agent's config file. Restart the agent and uniam will be available as a tool.
+
+For OpenCode, `uniam setup opencode` is global-only. It installs under `~/.config/opencode/` and sets up:
+
+- `opencode.json` MCP registration
+- `skills/uniam/SKILL.md`
+- `uniam-instructions.md`
+- `plugins/uniam.js`
+
+`uniam setup opencode --project` is intentionally not supported.
 
 Run `uniam setup` again at any time to re-apply the config — it is **idempotent** and will not overwrite other entries in your agent's config. This will also update installed agent skill files to their latest version.
 
@@ -82,46 +91,49 @@ Run `uniam doctor` to verify everything is working.
 
 ### Updating
 
-To update the binary, download the new release from the [Releases](../../releases) page and replace the old file in your PATH:
+Check whether a newer release is available:
 
 ```bash
-chmod +x uniam-linux-amd64
-mv uniam-linux-amd64 /usr/local/bin/uniam
+uniam check-update
 ```
 
-No config changes are needed — the agent always runs whatever `uniam` binary is in PATH when it starts the MCP server. Restart the agent after replacing the binary.
+Apply the latest compatible release to the current binary path:
+
+```bash
+uniam update
+```
+
+Check only without applying:
+
+```bash
+uniam update --check-only
+```
+
+No config changes are needed — the agent always runs whatever `uniam` binary is in PATH when it starts the MCP server. Restart the agent after updating the binary.
 
 ### Tell your agent to use Uniam
 
-MCP registration makes the tools available, but your agent also needs instructions to actually use them. The `setup` command installs a skill file automatically for agents that support it (Claude Code, Cursor, Windsurf, Antigravity, Codex, Codex CLI, Copilot, Gemini CLI). For other agents — or if you prefer to use a project-level rules file — add the following to your [AGENTS.md](AGENTS.md), `.rules`, `CLAUDE.md`, or equivalent:
+MCP registration makes the tools available, but your agent also needs instructions to actually use them. The `setup` command installs a skill file automatically for agents that support it (Claude Code, Cursor, Windsurf, Antigravity, Codex, Codex CLI, OpenCode, Copilot, Gemini CLI). For other agents — or if you prefer to use a project-level rules file — add the following to your [AGENTS.md](AGENTS.md), `.rules`, `CLAUDE.md`, or equivalent:
 
 > **Note for VS Code Copilot users**: Copilot does not automatically read global skill files. You must manually copy the instructions from the installed `skills` folder (e.g., `~/.uniam/skills/uniam.md`) directly into your VS Code Copilot Chat Rules settings to ensure proper agent behavior.
 
 ```markdown
-## Uniam — persistent notes
+## Uniam
 
-You have access to a persistent note storage system via the `uniam` MCP tools.
+Use Uniam for cross-session memory.
 
-**Session start — MANDATORY**: Before doing any work, retrieve notes from previous sessions:
-- Call `uniam_context` to get recent notes for this project
-- If the request relates to a specific topic, also call `uniam_search` with relevant terms
+Required workflow:
+- Before meaningful work, retrieve with `uniam_context`, `uniam_search`, or `uniam_retrieve`.
+- During long or decision-heavy work, checkpoint with `uniam_store`.
+- Before finishing meaningful work, store a final note with `uniam_store`.
+- Curate stale or repetitive memory with `uniam_archive`, `uniam_supersede`, `uniam_update_note`, and `uniam_compact`.
 
-**During session — MANDATORY**: While working, periodically call `uniam_store` at meaningful checkpoints:
-- After architectural or design decisions
-- After identifying a root cause or important debugging finding
-- After discovering non-obvious constraints, patterns, or gotchas
-- After the user clarifies or changes a requirement
-- During long sessions where context could be lost if interrupted
+Use `uniam_explain_search` when retrieval behavior needs debugging.
 
-**Session end — MANDATORY**: After any task that involved changes, decisions, bugs, or learnings, call `uniam_store` with:
-- `title`: short descriptive title
-- `what`: what happened or was decided
-- `why`: reasoning behind it
-- `impact`: what changed
-- `category`: one of `decision`, `pattern`, `bug`, `context`, `learning`
-- `details`: full context for a future agent with no prior knowledge
+Current scope is only the current project or folder. Cross-project access is not allowed.
 
-Do not skip any step. Retrieve at the start, store during meaningful checkpoints, and store again at the end. Notes are how context survives across sessions.
+Store decisions, bugs, root causes, constraints, and non-obvious project context.
+Do not store trivial edits, obvious code facts, secrets, or duplicates.
 ```
 
 ## Semantic search (optional)
@@ -189,13 +201,21 @@ UNIAM_CONTEXT_SEMANTIC=never uniam search "connection pool"
 uniam init                  Initialize uniam (~/.uniam)
 uniam doctor                Check health and capabilities
 uniam store                 Store a note
+uniam stats                 Show note counters and lifecycle stats
+uniam explain-search <q>    Explain retrieval behavior for a query
 uniam search <query>        Search notes
 uniam retrieve <id>         Show full note details
 uniam list                  List recent notes
+uniam update-note <id>      Update a note explicitly
+uniam archive <id>          Archive a note
+uniam supersede <id>        Mark a note as superseded by another
+uniam compact               Create a canonical summary note
 uniam remove <id>           Delete a note
 uniam notes                 List daily note files (alias: log)
 uniam config                Show current configuration
 uniam config init           Generate a starter config.yaml
+uniam check-update          Check for a newer release
+uniam update                Update the current binary
 uniam setup <agent>         Configure MCP for an agent
 uniam uninstall <agent>     Remove agent MCP config
 uniam reindex               Rebuild vector search index
@@ -238,6 +258,7 @@ uniam store \
 | `--limit` | `-n` | Maximum results |
 | `--source` | `-s` | Filter by source agent |
 | `--query` | `-q` | Text filter (list only) |
+| `--mode` |  | Retrieval mode (`list`, `search`) |
 
 ## Under the hood
 
@@ -277,10 +298,10 @@ Notes live in `~/.uniam/`:
 ```
 ~/.uniam/
   config.yaml          # embedding provider, model, API key
-  uniam.db            # SQLite database (WAL mode)
+  index.db             # SQLite database (WAL mode)
   shelves/
     project/
-      YYYY-MM-DD.md    # daily Markdown files — human-readable, Obsidian-compatible
+      YYYY-MM-DD-notes.md # daily Markdown files — human-readable, Obsidian-compatible
 ```
 
 The SQLite database holds structured note data and search indexes. The Markdown files in `shelves/` are append-only daily logs — they're the canonical human-readable view and survive even if the database is deleted (run `uniam reindex` to rebuild from them).
@@ -307,4 +328,4 @@ The binary embeds everything it needs. Runtime dependencies: zero. The full `go.
 
 ## License
 
-MIT
+GPL-3.0

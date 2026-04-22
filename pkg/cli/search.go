@@ -14,6 +14,7 @@ var (
 	searchLimit   int
 	searchProject bool
 	searchSource  string
+	searchMode    string
 )
 
 var searchCmd = &cobra.Command{
@@ -45,7 +46,7 @@ var searchCmd = &cobra.Command{
 			source = &searchSource
 		}
 
-		results, err := svc.Search(query, searchLimit, project, source, true)
+		results, err := svc.SearchWithMode(query, searchLimit, project, source, true, searchMode)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -102,4 +103,5 @@ func init() {
 	searchCmd.Flags().IntVarP(&searchLimit, "limit", "n", 5, "Maximum number of results")
 	searchCmd.Flags().BoolVarP(&searchProject, "project", "p", false, "Filter to current project")
 	searchCmd.Flags().StringVarP(&searchSource, "source", "s", "", "Filter by source")
+	searchCmd.Flags().StringVar(&searchMode, "mode", "search", "Retrieval mode: startup, search, debug, architecture, maintenance")
 }

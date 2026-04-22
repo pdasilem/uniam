@@ -20,6 +20,11 @@ type ItemModel struct {
 	RelatedFiles  string  `gorm:"type:text"` // JSON encoded
 	FilePath      string  `gorm:"type:text;not null"`
 	SectionAnchor string  `gorm:"type:text"`
+	Status        string  `gorm:"type:text;not null;default:active"`
+	SupersededBy  *string `gorm:"type:text"`
+	ArchivedAt    *string `gorm:"type:text"`
+	CoveredBy     *string `gorm:"type:text"`
+	IsCanonical   bool    `gorm:"default:false"`
 	CreatedAt     string  `gorm:"type:text;not null"`
 	UpdatedAt     string  `gorm:"type:text;not null"`
 	UpdatedCount  int     `gorm:"default:0"`
@@ -61,6 +66,11 @@ func (im *ItemModel) ToItem() models.Item {
 		FilePath:      im.FilePath,
 		SectionAnchor: im.SectionAnchor,
 		Project:       im.Project,
+		Status:        im.Status,
+		SupersededBy:  im.SupersededBy,
+		ArchivedAt:    im.ArchivedAt,
+		CoveredBy:     im.CoveredBy,
+		IsCanonical:   im.IsCanonical,
 		CreatedAt:     im.CreatedAt,
 		UpdatedAt:     im.UpdatedAt,
 	}
@@ -98,6 +108,11 @@ func (im *ItemModel) FromItem(item models.Item, tagsJSON, relatedFilesJSON strin
 	im.RelatedFiles = relatedFilesJSON
 	im.FilePath = item.FilePath
 	im.SectionAnchor = item.SectionAnchor
+	im.Status = item.Status
+	im.SupersededBy = item.SupersededBy
+	im.ArchivedAt = item.ArchivedAt
+	im.CoveredBy = item.CoveredBy
+	im.IsCanonical = item.IsCanonical
 	im.CreatedAt = item.CreatedAt
 	im.UpdatedAt = item.UpdatedAt
 }

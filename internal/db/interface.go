@@ -22,12 +22,14 @@ type Store interface {
 	GetItem(itemID string) (*models.Item, bool, error)
 	GetDetails(itemID string) (*models.ItemDetail, error)
 	UpdateItem(itemID string, what *string, why *string, impact *string, tags []string, detailsAppend *string) error
+	UpdateStatus(itemID string, status string, supersededBy *string, archivedAt *string, coveredBy *string) error
 	DeleteItem(itemID string) (bool, error)
 	FTSSearch(query string, limit int, project *string, source *string) ([]models.SearchResult, error)
 	VectorSearch(queryEmbedding []float32, limit int, project *string, source *string) ([]models.SearchResult, error)
 	ListRecent(limit int, project *string, source *string) ([]models.SearchResult, error)
 	ListAllForReindex() ([]map[string]any, error)
 	CountItems(project *string, source *string) (int64, error)
+	Stats(project *string, source *string) (*models.Stats, error)
 	HasVecTable() bool
 	EnsureVecTable(dim int) error
 	SetEmbeddingDim(dim int) error

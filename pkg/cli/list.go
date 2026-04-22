@@ -17,6 +17,7 @@ var (
 	listProject bool
 	listSource  string
 	listQuery   string
+	listMode    string
 )
 
 var listCmd = &cobra.Command{
@@ -50,7 +51,7 @@ var listCmd = &cobra.Command{
 			query = &listQuery
 		}
 
-		results, total, err := svc.GetContext(listLimit, project, source, query, "never", false)
+		results, total, err := svc.GetContextWithMode(listLimit, project, source, query, "never", false, listMode)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -94,4 +95,5 @@ func init() {
 	listCmd.Flags().BoolVarP(&listProject, "project", "p", false, "Filter to current project")
 	listCmd.Flags().StringVarP(&listSource, "source", "s", "", "Filter by source")
 	listCmd.Flags().StringVarP(&listQuery, "query", "q", "", "Search query for filtering")
+	listCmd.Flags().StringVar(&listMode, "mode", "startup", "Retrieval mode: startup, search, debug, architecture, maintenance")
 }

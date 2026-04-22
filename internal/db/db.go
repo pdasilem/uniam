@@ -110,6 +110,10 @@ func (d *DB) EnsureVecTable(dim int) error {
 
 // InsertItem inserts an item into the database using GORM.
 func (d *DB) InsertItem(item models.Item, details *string) (int64, error) {
+	if item.Status == "" {
+		item.Status = models.StatusActive
+	}
+
 	tagsJSON, err := json.Marshal(item.Tags)
 	if err != nil {
 		return 0, fmt.Errorf("failed to marshal tags: %w", err)
@@ -265,6 +269,39 @@ func (d *DB) UpdateItem(itemID string, what *string, why *string, impact *string
 	return nil
 }
 
+// UpdateStatus updates the lifecycle metadata for an item.
+func (d *DB) UpdateStatus(itemID string, status string, supersededBy *string, archivedAt *string, coveredBy *string) error {
+	var itemModel ItemModel
+	if err := d.db.Where("id LIKE ?", itemID+"%").First(&itemModel).Error; err != nil {
+		return fmt.Errorf("%w: %s", ErrNotFound, itemID)
+	}
+
+	updates := map[string]any{
+		"status":     status,
+		"updated_at": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	if supersededBy != nil {
+		updates["superseded_by"] = *supersededBy
+	} else {
+		updates["superseded_by"] = nil
+	}
+
+	if archivedAt != nil {
+		updates["archived_at"] = *archivedAt
+	} else {
+		updates["archived_at"] = nil
+	}
+
+	if coveredBy != nil {
+		updates["covered_by"] = *coveredBy
+	} else {
+		updates["covered_by"] = nil
+	}
+
+	return d.db.Model(&ItemModel{}).Where("id = ?", itemModel.ID).Updates(updates).Error
+}
+
 // DeleteItem deletes an item by ID or prefix using GORM.
 func (d *DB) DeleteItem(itemID string) (bool, error) {
 	// Resolve full ID from prefix
@@ -306,8 +343,8 @@ func (d *DB) FTSSearch(query string, limit int, project *string, source *string)
 
 	ftsQuery += ftsQuerySb315.String()
 
-	whereClause := ""
-	args := []any{ftsQuery}
+	whereClause := " AND m.status = ?"
+	args := []any{ftsQuery, models.StatusActive}
 
 	if project != nil {
 		whereClause += " AND m.project = ?" //nolint:goconst
@@ -324,24 +361,28 @@ func (d *DB) FTSSearch(query string, limit int, project *string, source *string)
 	args = append(args, limit)
 
 	var rows []struct {
-		ID         string
-		Title      string
-		What       string
-		Why        sql.NullString
-		Impact     sql.NullString
-		Category   sql.NullString
-		Tags       string
-		Project    string
-		Source     sql.NullString
-		FilePath   string
-		CreatedAt  string
-		Score      float64
-		HasDetails bool
+		ID           string
+		Title        string
+		What         string
+		Why          sql.NullString
+		Impact       sql.NullString
+		Category     sql.NullString
+		Tags         string
+		Project      string
+		Source       sql.NullString
+		Status       string
+		SupersededBy sql.NullString
+		CoveredBy    sql.NullString
+		IsCanonical  bool
+		FilePath     string
+		CreatedAt    string
+		Score        float64
+		HasDetails   bool
 	}
 
 	err := d.db.Raw(fmt.Sprintf(`
 		SELECT m.id, m.title, m.what, m.why, m.impact, m.category, m.tags,
-		       m.project, m.source, m.file_path, m.created_at,
+		       m.project, m.source, m.status, m.superseded_by, m.covered_by, m.is_canonical, m.file_path, m.created_at,
 		       -fts.rank as score,
 		       EXISTS(SELECT 1 FROM item_details WHERE item_id = m.id) as has_details
 		FROM items_fts fts
@@ -359,14 +400,16 @@ func (d *DB) FTSSearch(query string, limit int, project *string, source *string)
 
 	for i, row := range rows {
 		result := models.SearchResult{
-			ID:         row.ID,
-			Title:      row.Title,
-			What:       row.What,
-			Project:    row.Project,
-			FilePath:   row.FilePath,
-			CreatedAt:  row.CreatedAt,
-			Score:      row.Score,
-			HasDetails: row.HasDetails,
+			ID:          row.ID,
+			Title:       row.Title,
+			What:        row.What,
+			Project:     row.Project,
+			Status:      row.Status,
+			IsCanonical: row.IsCanonical,
+			FilePath:    row.FilePath,
+			CreatedAt:   row.CreatedAt,
+			Score:       row.Score,
+			HasDetails:  row.HasDetails,
 		}
 
 		if row.Why.Valid {
@@ -383,6 +426,14 @@ func (d *DB) FTSSearch(query string, limit int, project *string, source *string)
 
 		if row.Source.Valid {
 			result.Source = &row.Source.String
+		}
+
+		if row.SupersededBy.Valid {
+			result.SupersededBy = &row.SupersededBy.String
+		}
+
+		if row.CoveredBy.Valid {
+			result.CoveredBy = &row.CoveredBy.String
 		}
 
 		if err := json.Unmarshal([]byte(row.Tags), &result.Tags); err != nil {
@@ -407,23 +458,27 @@ func (d *DB) VectorSearch(queryEmbedding []float32, limit int, project *string, 
 	}
 
 	var rows []struct {
-		ID         string
-		Title      string
-		What       string
-		Why        sql.NullString
-		Impact     sql.NullString
-		Category   sql.NullString
-		Tags       string
-		Project    string
-		Source     sql.NullString
-		FilePath   string
-		CreatedAt  string
-		Distance   float64
-		HasDetails bool
+		ID           string
+		Title        string
+		What         string
+		Why          sql.NullString
+		Impact       sql.NullString
+		Category     sql.NullString
+		Tags         string
+		Project      string
+		Source       sql.NullString
+		Status       string
+		SupersededBy sql.NullString
+		CoveredBy    sql.NullString
+		IsCanonical  bool
+		FilePath     string
+		CreatedAt    string
+		Distance     float64
+		HasDetails   bool
 	}
 
-	whereClause := ""
-	args := []any{embeddingBytes, limit}
+	whereClause := " AND m.status = ?"
+	args := []any{embeddingBytes, limit, models.StatusActive}
 
 	if project != nil {
 		whereClause += " AND m.project = ?"
@@ -439,7 +494,7 @@ func (d *DB) VectorSearch(queryEmbedding []float32, limit int, project *string, 
 
 	err = d.db.Raw(fmt.Sprintf(`
 		SELECT m.id, m.title, m.what, m.why, m.impact, m.category, m.tags,
-		       m.project, m.source, m.file_path, m.created_at,
+		       m.project, m.source, m.status, m.superseded_by, m.covered_by, m.is_canonical, m.file_path, m.created_at,
 		       v.distance,
 		       EXISTS(SELECT 1 FROM item_details WHERE item_id = m.id) as has_details
 		FROM items_vec v
@@ -457,14 +512,16 @@ func (d *DB) VectorSearch(queryEmbedding []float32, limit int, project *string, 
 
 	for i, row := range rows {
 		result := models.SearchResult{
-			ID:         row.ID,
-			Title:      row.Title,
-			What:       row.What,
-			Project:    row.Project,
-			FilePath:   row.FilePath,
-			CreatedAt:  row.CreatedAt,
-			Score:      1.0 - row.Distance,
-			HasDetails: row.HasDetails,
+			ID:          row.ID,
+			Title:       row.Title,
+			What:        row.What,
+			Project:     row.Project,
+			Status:      row.Status,
+			IsCanonical: row.IsCanonical,
+			FilePath:    row.FilePath,
+			CreatedAt:   row.CreatedAt,
+			Score:       1.0 - row.Distance,
+			HasDetails:  row.HasDetails,
 		}
 
 		if row.Why.Valid {
@@ -483,6 +540,14 @@ func (d *DB) VectorSearch(queryEmbedding []float32, limit int, project *string, 
 			result.Source = &row.Source.String
 		}
 
+		if row.SupersededBy.Valid {
+			result.SupersededBy = &row.SupersededBy.String
+		}
+
+		if row.CoveredBy.Valid {
+			result.CoveredBy = &row.CoveredBy.String
+		}
+
 		if err := json.Unmarshal([]byte(row.Tags), &result.Tags); err != nil {
 			result.Tags = []string{}
 		}
@@ -496,8 +561,8 @@ func (d *DB) VectorSearch(queryEmbedding []float32, limit int, project *string, 
 // ListRecent lists recent items ordered by creation date descending.
 // Uses a single raw SQL query with an EXISTS subquery to avoid N+1 queries.
 func (d *DB) ListRecent(limit int, project *string, source *string) ([]models.SearchResult, error) {
-	whereClause := "1=1"
-	args := []any{}
+	whereClause := "m.status = ?"
+	args := []any{models.StatusActive}
 
 	if project != nil {
 		whereClause += " AND m.project = ?"
@@ -514,23 +579,27 @@ func (d *DB) ListRecent(limit int, project *string, source *string) ([]models.Se
 	args = append(args, limit)
 
 	var rows []struct {
-		ID         string
-		Title      string
-		What       string
-		Why        sql.NullString
-		Impact     sql.NullString
-		Category   sql.NullString
-		Tags       string
-		Project    string
-		Source     sql.NullString
-		FilePath   string
-		CreatedAt  string
-		HasDetails bool
+		ID           string
+		Title        string
+		What         string
+		Why          sql.NullString
+		Impact       sql.NullString
+		Category     sql.NullString
+		Tags         string
+		Project      string
+		Source       sql.NullString
+		Status       string
+		SupersededBy sql.NullString
+		CoveredBy    sql.NullString
+		IsCanonical  bool
+		FilePath     string
+		CreatedAt    string
+		HasDetails   bool
 	}
 
 	err := d.db.Raw(fmt.Sprintf(`
 		SELECT m.id, m.title, m.what, m.why, m.impact, m.category, m.tags,
-		       m.project, m.source, m.file_path, m.created_at,
+		       m.project, m.source, m.status, m.superseded_by, m.covered_by, m.is_canonical, m.file_path, m.created_at,
 		       EXISTS(SELECT 1 FROM item_details WHERE item_id = m.id) AS has_details
 		FROM items m
 		WHERE %s
@@ -545,13 +614,15 @@ func (d *DB) ListRecent(limit int, project *string, source *string) ([]models.Se
 
 	for i, row := range rows {
 		result := models.SearchResult{
-			ID:         row.ID,
-			Title:      row.Title,
-			What:       row.What,
-			Project:    row.Project,
-			FilePath:   row.FilePath,
-			CreatedAt:  row.CreatedAt,
-			HasDetails: row.HasDetails,
+			ID:          row.ID,
+			Title:       row.Title,
+			What:        row.What,
+			Project:     row.Project,
+			Status:      row.Status,
+			IsCanonical: row.IsCanonical,
+			FilePath:    row.FilePath,
+			CreatedAt:   row.CreatedAt,
+			HasDetails:  row.HasDetails,
 		}
 		if row.Why.Valid {
 			result.Why = &row.Why.String
@@ -567,6 +638,14 @@ func (d *DB) ListRecent(limit int, project *string, source *string) ([]models.Se
 
 		if row.Source.Valid {
 			result.Source = &row.Source.String
+		}
+
+		if row.SupersededBy.Valid {
+			result.SupersededBy = &row.SupersededBy.String
+		}
+
+		if row.CoveredBy.Valid {
+			result.CoveredBy = &row.CoveredBy.String
 		}
 
 		if err := json.Unmarshal([]byte(row.Tags), &result.Tags); err != nil {
@@ -638,6 +717,116 @@ func (d *DB) CountItems(project *string, source *string) (int64, error) {
 	}
 
 	return count, nil
+}
+
+// Stats returns aggregated counters for observability and diagnostics.
+func (d *DB) Stats(project *string, source *string) (*models.Stats, error) {
+	stats := &models.Stats{
+		ByProject:  map[string]int64{},
+		ByCategory: map[string]int64{},
+		BySource:   map[string]int64{},
+	}
+
+	base := d.db.Model(&ItemModel{})
+	if project != nil {
+		base = base.Where("project = ?", *project)
+	}
+	if source != nil {
+		base = base.Where("source = ?", *source)
+	}
+
+	if err := base.Count(&stats.Total).Error; err != nil {
+		return nil, err
+	}
+
+	statusCount := func(status string, target *int64) error {
+		return base.Session(&gorm.Session{}).Where("status = ?", status).Count(target).Error
+	}
+
+	if err := statusCount(models.StatusActive, &stats.Active); err != nil {
+		return nil, err
+	}
+	if err := statusCount(models.StatusArchived, &stats.Archived); err != nil {
+		return nil, err
+	}
+	if err := statusCount(models.StatusSuperseded, &stats.Superseded); err != nil {
+		return nil, err
+	}
+	if err := statusCount(models.StatusStale, &stats.Stale); err != nil {
+		return nil, err
+	}
+
+	if err := base.Session(&gorm.Session{}).
+		Where("id IN (SELECT item_id FROM item_details)").
+		Count(&stats.WithDetails).Error; err != nil {
+		return nil, err
+	}
+
+	if d.HasVecTable() {
+		vecQuery := d.db.Table("items m").Joins("JOIN items_vec v ON v.rowid = m.rowid")
+		if project != nil {
+			vecQuery = vecQuery.Where("m.project = ?", *project)
+		}
+		if source != nil {
+			vecQuery = vecQuery.Where("m.source = ?", *source)
+		}
+
+		if err := vecQuery.Count(&stats.WithVectors).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	var projectRows []struct {
+		Project string
+		Count   int64
+	}
+	if err := base.Session(&gorm.Session{}).
+		Select("project, COUNT(*) as count").
+		Group("project").
+		Scan(&projectRows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range projectRows {
+		stats.ByProject[row.Project] = row.Count
+	}
+
+	var categoryRows []struct {
+		Category sql.NullString
+		Count    int64
+	}
+	if err := base.Session(&gorm.Session{}).
+		Select("category, COUNT(*) as count").
+		Group("category").
+		Scan(&categoryRows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range categoryRows {
+		key := "<none>"
+		if row.Category.Valid && row.Category.String != "" {
+			key = row.Category.String
+		}
+		stats.ByCategory[key] = row.Count
+	}
+
+	var sourceRows []struct {
+		Source sql.NullString
+		Count  int64
+	}
+	if err := base.Session(&gorm.Session{}).
+		Select("source, COUNT(*) as count").
+		Group("source").
+		Scan(&sourceRows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range sourceRows {
+		key := "<none>"
+		if row.Source.Valid && row.Source.String != "" {
+			key = row.Source.String
+		}
+		stats.BySource[key] = row.Count
+	}
+
+	return stats, nil
 }
 
 // Close closes the database connection.

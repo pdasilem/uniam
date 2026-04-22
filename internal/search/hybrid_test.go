@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"uniam/internal/models"
 )
@@ -38,17 +39,23 @@ func (f *fakeStore) GetDetails(_ string) (*models.ItemDetail, error)    { return
 func (f *fakeStore) UpdateItem(_ string, _ *string, _ *string, _ *string, _ []string, _ *string) error {
 	return nil
 }
+func (f *fakeStore) UpdateStatus(_ string, _ string, _ *string, _ *string, _ *string) error {
+	return nil
+}
 func (f *fakeStore) DeleteItem(_ string) (bool, error) { return false, nil }
 func (f *fakeStore) ListRecent(_ int, _ *string, _ *string) ([]models.SearchResult, error) {
 	return nil, nil
 }
 func (f *fakeStore) ListAllForReindex() ([]map[string]any, error)   { return nil, nil }
 func (f *fakeStore) CountItems(_ *string, _ *string) (int64, error) { return 0, nil }
-func (f *fakeStore) HasVecTable() bool                              { return false }
-func (f *fakeStore) EnsureVecTable(_ int) error                     { return nil }
-func (f *fakeStore) SetEmbeddingDim(_ int) error                    { return nil }
-func (f *fakeStore) DropVecTable() error                            { return nil }
-func (f *fakeStore) Close() error                                   { return nil }
+func (f *fakeStore) Stats(_ *string, _ *string) (*models.Stats, error) {
+	return &models.Stats{}, nil
+}
+func (f *fakeStore) HasVecTable() bool           { return false }
+func (f *fakeStore) EnsureVecTable(_ int) error  { return nil }
+func (f *fakeStore) SetEmbeddingDim(_ int) error { return nil }
+func (f *fakeStore) DropVecTable() error         { return nil }
+func (f *fakeStore) Close() error                { return nil }
 
 // fakeEmbedder always returns a fixed 3-float vector.
 type fakeEmbedder struct {
@@ -177,6 +184,22 @@ func TestMergeResults_LimitRespected(t *testing.T) {
 	result := MergeResults(fts, nil, 1.0, 0.0, 2)
 	if len(result) != 2 {
 		t.Errorf("len = %d, want 2", len(result))
+	}
+}
+
+func TestApplyRetrievalMode_DebugBoostsBugCategory(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	bugCat := "bug"
+	contextCat := "context"
+
+	results := []models.SearchResult{
+		{ID: "context", Title: "context", Score: 0.9, Category: &contextCat, CreatedAt: now},
+		{ID: "bug", Title: "bug", Score: 0.8, Category: &bugCat, CreatedAt: now},
+	}
+
+	reranked := ApplyRetrievalMode(results, models.RetrievalDebug)
+	if reranked[0].ID != "bug" {
+		t.Fatalf("expected bug item to be ranked first in debug mode, got %s", reranked[0].ID)
 	}
 }
 

@@ -2,13 +2,16 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"uniam/internal/buildinfo"
 	"uniam/internal/config"
 	"uniam/internal/core"
 	"uniam/internal/redaction"
+	"uniam/internal/update"
 
 	"github.com/spf13/cobra"
 )
@@ -33,6 +36,8 @@ var doctorCmd = &cobra.Command{
 
 		home := config.GetUniamHome()
 		fmt.Printf("\nUniam home: %s\n\n", home)
+
+		exePath, exeErr := os.Executable()
 
 		// --- Filesystem ---
 		fmt.Println("Filesystem:")
@@ -71,8 +76,20 @@ var doctorCmd = &cobra.Command{
 			pass(".uniamignore", ignorePath)
 		}
 
+		if exeErr != nil {
+			warn("binary path", exeErr.Error())
+		} else {
+			pass("binary path", exePath)
+			if isPathWritable(exePath) {
+				pass("binary writable", "yes")
+			} else {
+				warn("binary writable", "no")
+			}
+		}
+
 		// --- Configuration ---
 		fmt.Println("\nConfiguration:")
+		pass("version", buildinfo.Version)
 
 		cfg, err := config.LoadConfig(configPath)
 		if err != nil {
@@ -105,6 +122,73 @@ var doctorCmd = &cobra.Command{
 			pass(".uniamignore patterns", fmt.Sprintf("%d custom patterns", len(patterns)))
 		}
 
+		// --- Agent readiness ---
+		fmt.Println("\nAgent readiness:")
+		rulesFiles := []string{"AGENTS.md", "CLAUDE.md", ".rules"}
+		foundRule := false
+		for _, name := range rulesFiles {
+			if _, err := os.Stat(name); err == nil {
+				pass("project rules", name)
+				foundRule = true
+				break
+			}
+		}
+		if !foundRule {
+			warn("project rules", "no AGENTS.md / CLAUDE.md / .rules found in cwd")
+		}
+
+		homeDir, _ := os.UserHomeDir()
+		agentSkillChecks := []struct {
+			label string
+			path  string
+		}{
+			{"codex skill", filepath.Join(homeDir, ".codex", "skills", "uniam", "SKILL.md")},
+			{"claude skill", filepath.Join(homeDir, ".claude", "skills", "uniam", "SKILL.md")},
+			{"cursor skill", filepath.Join(homeDir, ".cursor", "skills", "uniam", "SKILL.md")},
+			{"gemini skill", filepath.Join(homeDir, ".gemini", "skills", "uniam", "SKILL.md")},
+		}
+		for _, check := range agentSkillChecks {
+			if _, err := os.Stat(check.path); err == nil {
+				pass(check.label, check.path)
+			}
+		}
+
+		if homeDir == "" {
+			warn("opencode global", "home directory is unavailable")
+		} else {
+			fmt.Println("\nOpenCode global integration:")
+
+			openCodePaths := newOpenCodePaths(homeDir)
+			if _, err := os.Stat(openCodePaths.ConfigPath); err != nil {
+				fail("opencode.json", fmt.Sprintf("missing — expected %s", openCodePaths.ConfigPath))
+			} else {
+				pass("opencode.json", openCodePaths.ConfigPath)
+
+				if err := verifyOpenCodeMCPConfig(openCodePaths.ConfigPath); err != nil {
+					fail("mcp.uniam", err.Error())
+				} else {
+					pass("mcp.uniam", "configured")
+				}
+			}
+
+			requiredOpenCodeFiles := []struct {
+				label string
+				path  string
+			}{
+				{"opencode skill", openCodePaths.SkillPath},
+				{"uniam instructions", openCodePaths.InstructionsPath},
+				{"opencode plugin", openCodePaths.PluginPath},
+			}
+			for _, check := range requiredOpenCodeFiles {
+				if _, err := os.Stat(check.path); err != nil {
+					fail(check.label, fmt.Sprintf("missing — expected %s", check.path))
+					continue
+				}
+
+				pass(check.label, check.path)
+			}
+		}
+
 		// --- Database & search ---
 		fmt.Println("\nDatabase & search:")
 
@@ -126,12 +210,28 @@ var doctorCmd = &cobra.Command{
 			pass("note count", fmt.Sprintf("%d notes stored", total))
 		}
 
+		stats, err := svc.Stats(nil, nil)
+		if err != nil {
+			fail("active note count", err.Error())
+		} else {
+			pass("active note count", fmt.Sprintf("%d active / %d total", stats.Active, stats.Total))
+		}
+
 		pass("FTS5 search", "always available")
 
 		if svc.VectorsAvailable() {
 			pass("vector search", "available (sqlite-vec loaded, table exists)")
 		} else {
 			warn("vector search", "not available — run `uniam reindex` after configuring embeddings")
+		}
+
+		checker := update.NewChecker(buildinfo.Version)
+		if release, err := checker.Check(context.Background(), false); err != nil {
+			warn("update check", err.Error())
+		} else if release.UpdateAvailable {
+			warn("update available", fmt.Sprintf("%s -> %s", release.CurrentVersion, release.LatestVersion))
+		} else {
+			pass("update status", "up to date")
 		}
 
 		// --- Embedding provider live test ---
@@ -162,4 +262,58 @@ var doctorCmd = &cobra.Command{
 			os.Exit(1)
 		}
 	},
+}
+
+func isPathWritable(path string) bool {
+	dir := filepath.Dir(path)
+	if info, err := os.Stat(path); err == nil {
+		return info.Mode().Perm()&0200 != 0
+	}
+
+	if info, err := os.Stat(dir); err == nil {
+		return info.Mode().Perm()&0200 != 0
+	}
+
+	return false
+}
+
+type openCodePaths struct {
+	ConfigPath       string
+	SkillPath        string
+	InstructionsPath string
+	PluginPath       string
+}
+
+func newOpenCodePaths(homeDir string) openCodePaths {
+	baseDir := filepath.Join(homeDir, ".config", "opencode")
+
+	return openCodePaths{
+		ConfigPath:       filepath.Join(baseDir, "opencode.json"),
+		SkillPath:        filepath.Join(baseDir, "skills", "uniam", "SKILL.md"),
+		InstructionsPath: filepath.Join(baseDir, "uniam-instructions.md"),
+		PluginPath:       filepath.Join(baseDir, "plugins", "uniam.js"),
+	}
+}
+
+func verifyOpenCodeMCPConfig(configPath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read failed: %w", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return fmt.Errorf("invalid json: %w", err)
+	}
+
+	mcp, ok := decoded["mcp"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("mcp.uniam missing in %s", configPath)
+	}
+
+	if _, ok := mcp["uniam"].(map[string]any); !ok {
+		return fmt.Errorf("mcp.uniam missing in %s", configPath)
+	}
+
+	return nil
 }

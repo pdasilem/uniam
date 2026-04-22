@@ -293,6 +293,53 @@ func TestUpdateItem_NotFound(t *testing.T) {
 	}
 }
 
+func TestUpdateStatus_ArchiveHidesFromActiveRetrieval(t *testing.T) {
+	d := newTestDB(t)
+	item := makeItem("Archive Target", "proj")
+
+	if _, err := d.InsertItem(item, nil); err != nil {
+		t.Fatalf("InsertItem() error = %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := d.UpdateStatus(item.ID, models.StatusArchived, nil, &now, nil); err != nil {
+		t.Fatalf("UpdateStatus() error = %v", err)
+	}
+
+	results, err := d.ListRecent(10, nil, nil)
+	if err != nil {
+		t.Fatalf("ListRecent() error = %v", err)
+	}
+
+	if len(results) != 0 {
+		t.Fatalf("expected archived item to be hidden from active recent list, got %d results", len(results))
+	}
+}
+
+func TestUpdateStatus_SupersededHidesFromActiveSearch(t *testing.T) {
+	d := newTestDB(t)
+	item := makeItem("Supersede Target", "proj")
+	item.What = "unique supersede search token"
+
+	if _, err := d.InsertItem(item, nil); err != nil {
+		t.Fatalf("InsertItem() error = %v", err)
+	}
+
+	byID := "new-note-id"
+	if err := d.UpdateStatus(item.ID, models.StatusSuperseded, &byID, nil, nil); err != nil {
+		t.Fatalf("UpdateStatus() error = %v", err)
+	}
+
+	results, err := d.FTSSearch("supersede", 10, nil, nil)
+	if err != nil {
+		t.Fatalf("FTSSearch() error = %v", err)
+	}
+
+	if len(results) != 0 {
+		t.Fatalf("expected superseded item to be hidden from active search, got %d results", len(results))
+	}
+}
+
 // --- DeleteItem ---
 
 func TestDeleteItem_ExistingItem(t *testing.T) {
@@ -442,6 +489,50 @@ func TestCountItems_ProjectFilter(t *testing.T) {
 
 	if count != 1 {
 		t.Errorf("CountItems(alpha) = %d, want 1", count)
+	}
+}
+
+func TestStats_CountsLifecycleAndDetails(t *testing.T) {
+	d := newTestDB(t)
+
+	active := makeItem("Active Stats", "alpha")
+	archived := makeItem("Archived Stats", "alpha")
+	superseded := makeItem("Superseded Stats", "beta")
+
+	if _, err := d.InsertItem(active, stringPtr("details")); err != nil {
+		t.Fatalf("InsertItem() error = %v", err)
+	}
+	if _, err := d.InsertItem(archived, nil); err != nil {
+		t.Fatalf("InsertItem() error = %v", err)
+	}
+	if _, err := d.InsertItem(superseded, nil); err != nil {
+		t.Fatalf("InsertItem() error = %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := d.UpdateStatus(archived.ID, models.StatusArchived, nil, &now, nil); err != nil {
+		t.Fatalf("UpdateStatus(archived) error = %v", err)
+	}
+	byID := "replacement-id"
+	if err := d.UpdateStatus(superseded.ID, models.StatusSuperseded, &byID, nil, nil); err != nil {
+		t.Fatalf("UpdateStatus(superseded) error = %v", err)
+	}
+
+	stats, err := d.Stats(nil, nil)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+
+	if stats.Total != 3 || stats.Active != 1 || stats.Archived != 1 || stats.Superseded != 1 {
+		t.Fatalf("unexpected stats totals: %+v", *stats)
+	}
+
+	if stats.WithDetails != 1 {
+		t.Fatalf("expected WithDetails=1, got %d", stats.WithDetails)
+	}
+
+	if stats.ByProject["alpha"] != 2 || stats.ByProject["beta"] != 1 {
+		t.Fatalf("unexpected project stats: %+v", stats.ByProject)
 	}
 }
 

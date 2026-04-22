@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -23,10 +24,18 @@ type ContextConfig struct {
 	TopupRecent bool   `yaml:"topup_recent"`
 }
 
+// UpdatesConfig holds release check and auto-apply settings.
+type UpdatesConfig struct {
+	CheckOnMCPStart    bool `yaml:"check_on_mcp_start"`
+	CheckIntervalHours int  `yaml:"check_interval_hours"`
+	AutoApply          bool `yaml:"auto_apply"`
+}
+
 // Config holds the complete configuration.
 type Config struct {
 	Embedding EmbeddingConfig `yaml:"embedding"`
 	Context   ContextConfig   `yaml:"context"`
+	Updates   UpdatesConfig   `yaml:"updates"`
 }
 
 // GetUniamHome returns the uniam home directory.
@@ -50,6 +59,11 @@ func LoadConfig(path string) (*Config, error) {
 		Context: ContextConfig{
 			Semantic:    "auto",
 			TopupRecent: true,
+		},
+		Updates: UpdatesConfig{
+			CheckOnMCPStart:    true,
+			CheckIntervalHours: 24,
+			AutoApply:          false,
 		},
 	}
 
@@ -84,6 +98,10 @@ func LoadConfig(path string) (*Config, error) {
 		config.Context.Semantic = "auto"
 	}
 
+	if config.Updates.CheckIntervalHours <= 0 {
+		config.Updates.CheckIntervalHours = 24
+	}
+
 	// Environment variable overrides (take precedence over file values).
 	// Useful for MCP servers launched by host applications that inject secrets
 	// via the environment rather than writing them to disk.
@@ -107,6 +125,14 @@ func LoadConfig(path string) (*Config, error) {
 		config.Context.Semantic = v
 	}
 
+	if v := os.Getenv("UNIAM_UPDATES_CHECK_ON_MCP_START"); v != "" {
+		config.Updates.CheckOnMCPStart = stringsEqualFold(v, "1", "true", "yes", "on")
+	}
+
+	if v := os.Getenv("UNIAM_UPDATES_AUTO_APPLY"); v != "" {
+		config.Updates.AutoApply = stringsEqualFold(v, "1", "true", "yes", "on")
+	}
+
 	return config, nil
 }
 
@@ -125,6 +151,10 @@ func (c *Config) Validate() error {
 	validSemantic := map[string]bool{"auto": true, "always": true, "never": true}
 	if !validSemantic[c.Context.Semantic] {
 		return fmt.Errorf("invalid context.semantic %q: must be one of auto, always, never", c.Context.Semantic)
+	}
+
+	if c.Updates.CheckIntervalHours <= 0 {
+		return errors.New("updates.check_interval_hours must be greater than 0")
 	}
 
 	if c.Embedding.Provider == "openai" || c.Embedding.Provider == "openrouter" || c.Embedding.Provider == "google" {
@@ -172,9 +202,24 @@ embedding:
 context:
   semantic: auto                # auto | always | never
   topup_recent: true            # also include recent items
+
+updates:
+  check_on_mcp_start: true
+  check_interval_hours: 24
+  auto_apply: false
 `
 }
 
 func stringPtr(s string) *string {
 	return &s
+}
+
+func stringsEqualFold(value string, matches ...string) bool {
+	for _, match := range matches {
+		if strings.EqualFold(value, match) {
+			return true
+		}
+	}
+
+	return false
 }
