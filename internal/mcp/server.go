@@ -141,10 +141,9 @@ func registerTools(s *mcpsdk.Server, svc uniamService) error {
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query":   map[string]any{"type": "string", "description": "Search query"},
-				"limit":   map[string]any{"type": "integer", "description": "Maximum number of notes", "default": 5},
-				"project": map[string]any{"type": "string", "description": "Filter by project"},
-				"source":  map[string]any{"type": "string", "description": "Filter by source"},
+				"query":  map[string]any{"type": "string", "description": "Search query"},
+				"limit":  map[string]any{"type": "integer", "description": "Maximum number of notes", "default": 5},
+				"source": map[string]any{"type": "string", "description": "Filter by source"},
 			},
 			"required": []string{"query"},
 		},
@@ -171,9 +170,8 @@ func registerTools(s *mcpsdk.Server, svc uniamService) error {
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"limit":   map[string]any{"type": "integer", "description": "Maximum number of notes", "default": 10},
-				"project": map[string]any{"type": "string", "description": "Project name (defaults to current directory)"},
-				"source":  map[string]any{"type": "string", "description": "Filter by source"},
+				"limit":  map[string]any{"type": "integer", "description": "Maximum number of notes", "default": 10},
+				"source": map[string]any{"type": "string", "description": "Filter by source"},
 			},
 		},
 	}, contextHandler)
@@ -199,8 +197,7 @@ func registerTools(s *mcpsdk.Server, svc uniamService) error {
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id":      map[string]any{"type": "string", "description": "Full note ID"},
-				"project": map[string]any{"type": "string", "description": "Must match the current project if provided"},
+				"id": map[string]any{"type": "string", "description": "Full note ID"},
 			},
 			"required": []string{"id"},
 		},
@@ -227,8 +224,7 @@ func registerTools(s *mcpsdk.Server, svc uniamService) error {
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id":      map[string]any{"type": "string", "description": "Note ID or unique prefix in the current project"},
-				"project": map[string]any{"type": "string", "description": "Must match the current project if provided"},
+				"id": map[string]any{"type": "string", "description": "Note ID or unique prefix in the current project"},
 			},
 			"required": []string{"id"},
 		},
@@ -255,9 +251,8 @@ func registerTools(s *mcpsdk.Server, svc uniamService) error {
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"id":      map[string]any{"type": "string", "description": "Note ID or unique prefix in the current project"},
-				"by":      map[string]any{"type": "string", "description": "Replacement note ID or unique prefix in the current project"},
-				"project": map[string]any{"type": "string", "description": "Must match the current project if provided"},
+				"id": map[string]any{"type": "string", "description": "Note ID or unique prefix in the current project"},
+				"by": map[string]any{"type": "string", "description": "Replacement note ID or unique prefix in the current project"},
 			},
 			"required": []string{"id", "by"},
 		},
@@ -290,7 +285,6 @@ func registerTools(s *mcpsdk.Server, svc uniamService) error {
 				"impact":  map[string]any{"type": "string", "description": "Replace the Impact field"},
 				"tags":    map[string]any{"type": []any{"string", "array"}, "items": map[string]any{"type": "string"}, "description": "Replace tags with a comma-separated string or array"},
 				"details": map[string]any{"type": "string", "description": "Append or create details content"},
-				"project": map[string]any{"type": "string", "description": "Must match the current project if provided"},
 			},
 			"required": []string{"id"},
 		},
@@ -326,7 +320,6 @@ func registerTools(s *mcpsdk.Server, svc uniamService) error {
 				"source":   map[string]any{"type": "string", "description": "Restrict compaction to notes from a given source"},
 				"category": map[string]any{"type": "string", "description": "Restrict compaction to a given category"},
 				"limit":    map[string]any{"type": "integer", "description": "Maximum number of matching notes to compact", "default": 20},
-				"project":  map[string]any{"type": "string", "description": "Must match the current project if provided"},
 			},
 			"required": []string{"title", "what", "query"},
 		},
@@ -357,7 +350,6 @@ func registerTools(s *mcpsdk.Server, svc uniamService) error {
 				"limit":   map[string]any{"type": "integer", "description": "Maximum number of results", "default": 5},
 				"vectors": map[string]any{"type": "boolean", "description": "Allow vector search when available", "default": true},
 				"mode":    map[string]any{"type": "string", "description": "Retrieval mode: startup, search, debug, architecture, maintenance", "default": "search"},
-				"project": map[string]any{"type": "string", "description": "Must match the current project if provided"},
 				"source":  map[string]any{"type": "string", "description": "Filter by source"},
 			},
 			"required": []string{"query"},
