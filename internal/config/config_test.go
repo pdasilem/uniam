@@ -55,6 +55,8 @@ func TestSaveConfig(t *testing.T) {
 
 	context7Key := "ctx7sk-test"
 	braveKey := "brv-test"
+	searxngURL := "http://127.0.0.1:8080"
+	firecrawlKey := "fc-test"
 	codeSearchPath := "/tmp/code-search/dist/index.js"
 	cfg := &Config{
 		Embedding: EmbeddingConfig{
@@ -68,8 +70,12 @@ func TestSaveConfig(t *testing.T) {
 			Context7Enabled:    true,
 			Context7APIKey:     &context7Key,
 			GitEnabled:         true,
+			SearXNGEnabled:     true,
+			SearXNGURL:         &searxngURL,
 			BraveSearchEnabled: true,
 			BraveSearchAPIKey:  &braveKey,
+			FirecrawlEnabled:   true,
+			FirecrawlAPIKey:    &firecrawlKey,
 		},
 	}
 
@@ -118,5 +124,21 @@ func TestSaveConfig(t *testing.T) {
 
 	if loaded.Integrations.BraveSearchAPIKey == nil || *loaded.Integrations.BraveSearchAPIKey != braveKey {
 		t.Errorf("LoadConfig() BraveSearchAPIKey = %v, want %q", loaded.Integrations.BraveSearchAPIKey, braveKey)
+	}
+
+	if !loaded.Integrations.SearXNGEnabled {
+		t.Error("LoadConfig() SearXNGEnabled = false, want true")
+	}
+
+	if loaded.Integrations.SearXNGURL == nil || *loaded.Integrations.SearXNGURL != searxngURL {
+		t.Errorf("LoadConfig() SearXNGURL = %v, want %q", loaded.Integrations.SearXNGURL, searxngURL)
+	}
+
+	if !loaded.Integrations.FirecrawlEnabled {
+		t.Error("LoadConfig() FirecrawlEnabled = false, want true")
+	}
+
+	if loaded.Integrations.FirecrawlAPIKey == nil || *loaded.Integrations.FirecrawlAPIKey != firecrawlKey {
+		t.Errorf("LoadConfig() FirecrawlAPIKey = %v, want %q", loaded.Integrations.FirecrawlAPIKey, firecrawlKey)
 	}
 }

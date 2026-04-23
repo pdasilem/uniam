@@ -39,8 +39,12 @@ type IntegrationsConfig struct {
 	Context7Enabled    bool    `yaml:"context7_enabled"`
 	Context7APIKey     *string `yaml:"context7_api_key"`
 	GitEnabled         bool    `yaml:"git_enabled"`
+	SearXNGEnabled     bool    `yaml:"searxng_enabled"`
+	SearXNGURL         *string `yaml:"searxng_url"`
 	BraveSearchEnabled bool    `yaml:"brave_search_enabled"`
 	BraveSearchAPIKey  *string `yaml:"brave_search_api_key"`
+	FirecrawlEnabled   bool    `yaml:"firecrawl_enabled"`
+	FirecrawlAPIKey    *string `yaml:"firecrawl_api_key"`
 }
 
 // Config holds the complete configuration.
@@ -228,8 +232,12 @@ integrations:
   context7_enabled: false
   # context7_api_key: ctx7sk-... # optional; reused during agent setup when enabling Context7
   git_enabled: false
+  searxng_enabled: false
+  # searxng_url: http://localhost:8213 # optional; reused during agent setup when enabling SearXNG MCP
   brave_search_enabled: false
   # brave_search_api_key: BSA... # optional; reused during agent setup when enabling Brave Search
+  firecrawl_enabled: false
+  # firecrawl_api_key: fc-... # optional; reused during agent setup when enabling Firecrawl MCP
 `
 }
 

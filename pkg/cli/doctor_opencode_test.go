@@ -23,9 +23,6 @@ func TestNewOpenCodePaths(t *testing.T) {
 		t.Fatalf("SkillPath = %q, want %q", got, want)
 	}
 
-	if got, want := paths.PluginPath, filepath.Join("/tmp/home", ".config", "opencode", "plugins", "uniam.js"); got != want {
-		t.Fatalf("PluginPath = %q, want %q", got, want)
-	}
 }
 
 func TestVerifyOpenCodeMCPConfig(t *testing.T) {

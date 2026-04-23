@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -130,15 +131,45 @@ var doctorCmd = &cobra.Command{
 			} else {
 				warn("Git MCP", "not enabled in Uniam config")
 			}
+			if cfg.Integrations.SearXNGEnabled {
+				url := ""
+				if cfg.Integrations.SearXNGURL != nil {
+					url = strings.TrimSpace(*cfg.Integrations.SearXNGURL)
+				}
+				if url != "" {
+					if _, err := exec.LookPath("npx"); err == nil {
+						pass("SearXNG MCP", "enabled in Uniam config ("+url+"; npx available)")
+					} else {
+						warn("SearXNG MCP", "enabled in Uniam config but npx is not available ("+url+")")
+					}
+				} else {
+					warn("SearXNG MCP", "enabled in Uniam config but no searxng_url is configured")
+				}
+			} else {
+				warn("SearXNG MCP", "not enabled in Uniam config")
+			}
+			if cfg.Integrations.FirecrawlEnabled {
+				pass("Firecrawl MCP", "enabled in Uniam config")
+			} else {
+				warn("Firecrawl MCP", "not enabled in Uniam config")
+			}
 			if cfg.Integrations.Context7APIKey != nil && strings.TrimSpace(*cfg.Integrations.Context7APIKey) != "" {
 				pass("context7 api key", "configured in Uniam config")
 			} else {
 				warn("context7 api key", "not configured")
 			}
+			if cfg.Integrations.SearXNGEnabled && cfg.Integrations.BraveSearchEnabled {
+				warn("web search MCP", "multiple search providers enabled in Uniam config; prefer one of SearXNG or Brave Search")
+			}
 			if cfg.Integrations.BraveSearchAPIKey != nil && strings.TrimSpace(*cfg.Integrations.BraveSearchAPIKey) != "" {
 				pass("brave api key", "configured in Uniam config")
 			} else {
 				warn("brave api key", "not configured")
+			}
+			if cfg.Integrations.FirecrawlAPIKey != nil && strings.TrimSpace(*cfg.Integrations.FirecrawlAPIKey) != "" {
+				pass("firecrawl api key", "configured in Uniam config")
+			} else {
+				warn("firecrawl api key", "not configured")
 			}
 		}
 
@@ -257,7 +288,6 @@ type openCodePaths struct {
 	ConfigPath string
 	AgentsPath string
 	SkillPath  string
-	PluginPath string
 }
 
 type integrationStatus struct {
@@ -273,7 +303,6 @@ func newOpenCodePaths(homeDir string) openCodePaths {
 		ConfigPath: filepath.Join(baseDir, "opencode.json"),
 		AgentsPath: filepath.Join(baseDir, "AGENTS.md"),
 		SkillPath:  filepath.Join(baseDir, "skills", "uniam", "SKILL.md"),
-		PluginPath: filepath.Join(baseDir, "plugins", "uniam.js"),
 	}
 }
 
@@ -340,6 +369,7 @@ func globalIntegrationStatuses(homeDir string) []integrationStatus {
 	statuses := []integrationStatus{
 		checkJSONIntegration("Claude Code", filepath.Join(homeDir, ".claude.json"), "mcpServers", "uniam", []string{
 			filepath.Join(homeDir, ".claude", "skills", "uniam", "SKILL.md"),
+			filepath.Join(homeDir, ".claude", "CLAUDE.md"),
 		}),
 		checkJSONIntegration("Cursor", filepath.Join(homeDir, ".cursor", "mcp.json"), "mcpServers", "uniam", []string{
 			filepath.Join(homeDir, ".cursor", "skills", "uniam", "SKILL.md"),
@@ -350,16 +380,12 @@ func globalIntegrationStatuses(homeDir string) []integrationStatus {
 		}),
 		checkCodexIntegration(homeDir),
 		checkOpenCodeIntegration(homeDir),
-		{
-			name:   "RooCode",
-			status: "not-supported",
-			detail: "project-only integration; no global setup path",
-		},
 		checkJSONIntegration("GitHub Copilot", mustCopilotConfigPath(homeDir), "mcpServers", "uniam", []string{
 			filepath.Join(homeDir, ".uniam", "skills", "uniam", "SKILL.md"),
 		}),
 		checkJSONIntegration("Gemini CLI", filepath.Join(homeDir, ".gemini", "settings.json"), "mcpServers", "uniam", []string{
 			filepath.Join(homeDir, ".gemini", "skills", "uniam", "SKILL.md"),
+			filepath.Join(homeDir, ".gemini", "AGENTS.md"),
 		}),
 	}
 
@@ -396,6 +422,7 @@ func checkCodexIntegration(homeDir string) integrationStatus {
 
 	missing := missingPaths([]string{
 		filepath.Join(homeDir, ".codex", "skills", "uniam", "SKILL.md"),
+		filepath.Join(homeDir, ".codex", "AGENTS.md"),
 	})
 	if len(missing) > 0 {
 		return integrationStatus{name: "Codex", status: "broken", detail: fmt.Sprintf("config ok, missing %s", strings.Join(missing, ", "))}
@@ -414,7 +441,7 @@ func checkOpenCodeIntegration(homeDir string) integrationStatus {
 		return integrationStatus{name: "OpenCode", status: "broken", detail: err.Error()}
 	}
 
-	missing := missingPaths([]string{paths.AgentsPath, paths.SkillPath, paths.PluginPath})
+	missing := missingPaths([]string{paths.AgentsPath, paths.SkillPath})
 	if len(missing) > 0 {
 		return integrationStatus{name: "OpenCode", status: "broken", detail: fmt.Sprintf("config ok, missing %s", strings.Join(missing, ", "))}
 	}

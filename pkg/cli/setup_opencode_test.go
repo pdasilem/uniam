@@ -34,7 +34,7 @@ func TestSetupOpenCodeInstallsGlobalAssetsAndIsIdempotent(t *testing.T) {
 
 	assertOpenCodeManagedFiles(t, target)
 	assertOpenCodeConfigState(t, configPath, "./keep.md", true)
-	assertOpenCodeAgentsManaged(t, filepath.Join(target, "AGENTS.md"))
+	assertOpenCodeAgentsManaged(t, filepath.Join(target, "AGENTS.md"), "opencode")
 
 	if _, err := setupOpenCode(false, false); err != nil {
 		t.Fatalf("second setupOpenCode() error = %v", err)
@@ -42,7 +42,7 @@ func TestSetupOpenCodeInstallsGlobalAssetsAndIsIdempotent(t *testing.T) {
 
 	assertOpenCodeManagedFiles(t, target)
 	assertOpenCodeConfigState(t, configPath, "./keep.md", true)
-	assertOpenCodeAgentsManaged(t, filepath.Join(target, "AGENTS.md"))
+	assertOpenCodeAgentsManaged(t, filepath.Join(target, "AGENTS.md"), "opencode")
 }
 
 func TestSetupOpenCodeInstallsProjectAssetsAndIsIdempotent(t *testing.T) {
@@ -82,7 +82,7 @@ func TestSetupOpenCodeInstallsProjectAssetsAndIsIdempotent(t *testing.T) {
 
 	assertOpenCodeManagedFiles(t, target)
 	assertOpenCodeConfigState(t, configPath, "./keep.md", true)
-	assertOpenCodeAgentsManaged(t, filepath.Join(repo, "AGENTS.md"))
+	assertOpenCodeAgentsManaged(t, filepath.Join(repo, "AGENTS.md"), "agents")
 
 	if _, err := setupOpenCode(true, false); err != nil {
 		t.Fatalf("second setupOpenCode(true, false) error = %v", err)
@@ -90,7 +90,7 @@ func TestSetupOpenCodeInstallsProjectAssetsAndIsIdempotent(t *testing.T) {
 
 	assertOpenCodeManagedFiles(t, target)
 	assertOpenCodeConfigState(t, configPath, "./keep.md", true)
-	assertOpenCodeAgentsManaged(t, filepath.Join(repo, "AGENTS.md"))
+	assertOpenCodeAgentsManaged(t, filepath.Join(repo, "AGENTS.md"), "agents")
 }
 
 func TestUninstallOpenCodeRemovesOnlyUniamManagedAssets(t *testing.T) {
@@ -125,7 +125,6 @@ func TestUninstallOpenCodeRemovesOnlyUniamManagedAssets(t *testing.T) {
 
 	for _, path := range []string{
 		filepath.Join(target, "skills", "uniam", "SKILL.md"),
-		filepath.Join(target, "plugins", openCodePluginFileName),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected managed asset %q to be removed, stat err = %v", path, err)
@@ -182,13 +181,79 @@ func TestSetupOpenCodeAddsContext7WhenEnabled(t *testing.T) {
 		t.Fatal("expected mcp.context7 to be configured")
 	}
 
-	env, ok := context7["env"].(map[string]any)
+	env, ok := context7["environment"].(map[string]any)
 	if !ok {
-		t.Fatalf("context7 env type = %T, want map[string]any", context7["env"])
+		t.Fatalf("context7 environment type = %T, want map[string]any", context7["environment"])
 	}
 
 	if got := env["CONTEXT7_API_KEY"]; got != "ctx7sk-test" {
 		t.Fatalf("CONTEXT7_API_KEY = %v, want %q", got, "ctx7sk-test")
+	}
+}
+
+func TestSetupOpenCodeAddsSearXNGAndFirecrawlWhenEnabled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	target := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+
+	configPath := filepath.Join(target, "opencode.json")
+	writeJSONFixture(t, configPath, map[string]any{})
+
+	prevOptions := currentSetupOptions
+	t.Cleanup(func() {
+		currentSetupOptions = prevOptions
+	})
+
+	currentSetupOptions = setupOptions{
+		SearXNG:         true,
+		SearXNGURL:      "http://127.0.0.1:8080",
+		Firecrawl:       true,
+		FirecrawlAPIKey: "fc-test",
+	}
+
+	if _, err := setupOpenCode(false, false); err != nil {
+		t.Fatalf("setupOpenCode() error = %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	mcp, ok := decoded["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("config mcp type = %T, want map[string]any", decoded["mcp"])
+	}
+
+	searxng, ok := mcp["searxng"].(map[string]any)
+	if !ok {
+		t.Fatal("expected mcp.searxng to be configured")
+	}
+	command, ok := searxng["command"].([]any)
+	if !ok || len(command) != 3 || command[0] != "npx" || command[1] != "-y" || command[2] != "mcp-searxng" {
+		t.Fatalf("searxng command = %v, want %v", searxng["command"], []string{"npx", "-y", "mcp-searxng"})
+	}
+	searxEnv, ok := searxng["environment"].(map[string]any)
+	if !ok || searxEnv["SEARXNG_URL"] != "http://127.0.0.1:8080" {
+		t.Fatalf("SEARXNG_URL = %v, want %q", searxEnv["SEARXNG_URL"], "http://127.0.0.1:8080")
+	}
+
+	firecrawl, ok := mcp["firecrawl"].(map[string]any)
+	if !ok {
+		t.Fatal("expected mcp.firecrawl to be configured")
+	}
+	firecrawlEnv, ok := firecrawl["environment"].(map[string]any)
+	if !ok || firecrawlEnv["FIRECRAWL_API_KEY"] != "fc-test" {
+		t.Fatalf("FIRECRAWL_API_KEY = %v, want %q", firecrawlEnv["FIRECRAWL_API_KEY"], "fc-test")
 	}
 }
 
@@ -197,7 +262,6 @@ func assertOpenCodeManagedFiles(t *testing.T, target string) {
 
 	for _, path := range []string{
 		filepath.Join(target, "skills", "uniam", "SKILL.md"),
-		filepath.Join(target, "plugins", openCodePluginFileName),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected managed asset %q to exist: %v", path, err)
@@ -265,7 +329,7 @@ func assertOpenCodeConfigState(t *testing.T, configPath string, keepInstruction 
 	}
 }
 
-func assertOpenCodeAgentsManaged(t *testing.T, path string) {
+func assertOpenCodeAgentsManaged(t *testing.T, path string, marker string) {
 	t.Helper()
 
 	data, err := os.ReadFile(path)
@@ -274,10 +338,12 @@ func assertOpenCodeAgentsManaged(t *testing.T, path string) {
 	}
 
 	text := string(data)
-	if !strings.Contains(text, "<!-- uniam:begin opencode -->") {
+	begin := "<!-- uniam:begin " + marker + " -->"
+	end := "<!-- uniam:end " + marker + " -->"
+	if !strings.Contains(text, begin) {
 		t.Fatalf("OpenCode AGENTS.md missing managed block begin marker in %q", path)
 	}
-	if !strings.Contains(text, "<!-- uniam:end opencode -->") {
+	if !strings.Contains(text, end) {
 		t.Fatalf("OpenCode AGENTS.md missing managed block end marker in %q", path)
 	}
 	if !strings.Contains(text, "## Uniam") {

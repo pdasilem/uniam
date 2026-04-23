@@ -12,7 +12,9 @@ During `uniam setup`, you can opt into any of these MCP servers. Each prompt def
 | `code-search` | Broader code discovery, symbol-oriented search, and cross-file navigation |
 | `Context7` | Up-to-date library docs, current package versions, and dependency compatibility |
 | `Git` | Structured repository status, diff, history, and branch inspection |
+| `SearXNG` | Web search through your own SearXNG instance |
 | `Brave Search` | Web search for current external information |
+| `Firecrawl` | Web scraping, page fetch, crawling, extraction, and live web data access |
 
 ### CLI flags
 
@@ -23,7 +25,9 @@ uniam setup claude-code --ripgrep
 uniam setup claude-code --code-search
 uniam setup claude-code --context7
 uniam setup claude-code --git-mcp
+uniam setup claude-code --searxng
 uniam setup claude-code --brave-search
+uniam setup claude-code --firecrawl
 ```
 
 These flags work with every supported agent setup target.
@@ -33,10 +37,14 @@ These flags work with every supported agent setup target.
 Uniam stores optional MCP state in `~/.uniam/config.yaml` under `integrations`.
 
 - `Context7` reuses `integrations.context7_api_key`
+- `SearXNG` reuses `integrations.searxng_url`
 - `Brave Search` reuses `integrations.brave_search_api_key`
+- `Firecrawl` reuses `integrations.firecrawl_api_key`
 - `code-search` reuses `integrations.code_search_path` after the first successful local install
 
 If a saved key already exists, setup lets you press Enter to reuse it. If the key is empty and you do not provide one, that MCP is skipped for the current setup run.
+
+If `SearXNG` is enabled, setup reuses `integrations.searxng_url` when present. If no saved URL exists yet, it probes common local instance addresses first and offers the detected URL for reuse. `SearXNG` and `Brave Search` are alternative search-provider choices; `Firecrawl` is a separate scraping and fetch integration that can be enabled alongside either of them.
 
 ### ripgrep MCP
 
@@ -139,6 +147,45 @@ Uniam skips Git MCP setup if `uvx` is not available in `PATH`.
 ```
 
 Use it when an agent needs current external information from the web.
+
+### SearXNG MCP
+
+`SearXNG` is configured with:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "mcp-searxng"],
+  "env": {
+    "SEARXNG_URL": "http://127.0.0.1:8080"
+  }
+}
+```
+
+Use it when you want web search through your own SearXNG instance instead of a hosted search API.
+
+Uniam reuses an existing `integrations.searxng_url` value when present. If no URL is saved yet, setup probes common local instance addresses and lets you confirm the detected URL or enter one manually. The generated MCP config runs `mcp-searxng` through `npx -y`, so the package is fetched on demand by the agent environment when needed.
+
+### Firecrawl MCP
+
+`Firecrawl` is configured with:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "firecrawl-mcp"],
+  "env": {
+    "FIRECRAWL_API_KEY": "fc-..."
+  }
+}
+```
+
+Use it when an agent needs:
+
+- page fetch and scraping
+- structured extraction
+- crawling and discovery
+- live web content beyond plain search results
 
 ## Semantic search
 

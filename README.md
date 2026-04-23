@@ -9,7 +9,7 @@ Local note storage for coding agents. Your agent keeps notes on decisions, bugs,
 
 ## Features
 
-- **Works with multiple agents** — Claude Code, Cursor, Windsurf, Antigravity, Codex, OpenCode, RooCode, GitHub Copilot, and Gemini CLI. One command sets up MCP config for your agent.
+- **Works with multiple agents** — Claude Code, Cursor, Windsurf, Antigravity, Codex, OpenCode, GitHub Copilot, and Gemini CLI. One command sets up MCP config for your agent.
 - **MCP native** — Runs as an MCP server exposing project-scoped memory tools such as `uniam_context`, `uniam_search`, `uniam_retrieve`, `uniam_store`, `uniam_archive`, `uniam_supersede`, `uniam_update_note`, `uniam_compact`, and `uniam_explain_search`.
 - **Local-first** — Everything stays on your machine. Notes are stored as Markdown in `~/.uniam/shelves/`, readable in Obsidian or any editor.
 - **Zero idle cost** — No background processes, no daemon, no RAM overhead. The MCP server only runs when the agent starts it.
@@ -67,10 +67,10 @@ uniam init
 ### Connect your agent
 
 ```bash
-uniam setup claude-code   # or: cursor, windsurf, antigravity, codex, opencode, roocode, copilot, gemini-cli
+uniam setup claude-code   # or: cursor, windsurf, antigravity, codex, opencode, copilot, gemini-cli
 ```
 
-By default, `setup` asks whether to also install optional MCP servers for `ripgrep`, `code-search`, `Context7`, `Git`, and `Brave Search`.
+By default, `setup` asks whether to also install optional MCP servers for `ripgrep`, `code-search`, `Context7`, `Git`, `SearXNG`, `Brave Search`, and `Firecrawl`.
 
 To skip the prompt and opt in explicitly, use:
 
@@ -79,12 +79,16 @@ uniam setup claude-code --ripgrep
 uniam setup claude-code --code-search
 uniam setup claude-code --context7
 uniam setup claude-code --git-mcp
+uniam setup claude-code --searxng
 uniam setup claude-code --brave-search
+uniam setup claude-code --firecrawl
 ```
 
 These flags work with every supported agent setup target.
 
-When you enable `Context7` or `Brave Search`, Uniam reads the saved API key from `~/.uniam/config.yaml` if one is already present there. During setup, you can press Enter to reuse the saved key or enter a new one; new values are written back to the same Uniam config file so you do not need to re-enter the key for each agent.
+When you enable `Context7`, `Brave Search`, or `Firecrawl`, Uniam reads the saved API key from `~/.uniam/config.yaml` if one is already present there. During setup, you can press Enter to reuse the saved key or enter a new one; new values are written back to the same Uniam config file so you do not need to re-enter the key for each agent.
+
+When you enable `SearXNG`, Uniam first tries to reuse `integrations.searxng_url` from the same config file. If no saved URL exists, setup probes common local instance addresses such as `http://localhost:8213` and lets you reuse the detected instance or enter a different URL manually. `SearXNG` and `Brave Search` are treated as alternative web-search providers during setup, while `Firecrawl` is an additional scraping and fetch integration.
 
 This writes the MCP server entry into your agent's config file. Restart the agent and uniam will be available as a tool.
 
@@ -101,15 +105,14 @@ Project scope is always relative to the current working directory. Do not run `-
 
 | Agent | Scope support | Notes |
 | --- | --- | --- |
-| Claude Code | Global and project | Run `uniam setup claude-code --project` from the repo root to write `.mcp.json` and `./.claude/` there |
-| Cursor | Global and project | Run `uniam setup cursor --project` from the repo root to write `./.cursor/` there |
+| Claude Code | Global and project | Run `uniam setup claude-code --project` from the repo root to write `.mcp.json`, `./.claude/`, and a managed `./CLAUDE.md` block there |
+| Cursor | Global and project | Run `uniam setup cursor --project` from the repo root to write `./.cursor/` and a managed `./AGENTS.md` block there |
 | Windsurf | Global only | `--project` is not supported |
 | Antigravity | Global and project | Run `uniam setup antigravity --project` from the repo root to write `./.gemini/antigravity/` there |
 | Codex | Global and project | Run `uniam setup codex --project` from the repo root to write `./.codex/` there |
-| OpenCode | Global and project | Run `uniam setup opencode --project` from the repo root to write `opencode.json` and `./.opencode/` there |
-| RooCode | Project only | Run `uniam setup roocode --project` from the repo root; it writes only to `./.roo/mcp.json` |
+| OpenCode | Global and project | Run `uniam setup opencode --project` from the repo root to write `opencode.json`, `./.opencode/`, and a managed `./AGENTS.md` block there |
 | GitHub Copilot | Global and project | Run `uniam setup copilot --project` from the repo root to write `.mcp.json` and `./.github/` there |
-| Gemini CLI | Global and project | Run `uniam setup gemini-cli --project` from the repo root to write `./.gemini/` there |
+| Gemini CLI | Global and project | Run `uniam setup gemini-cli --project` from the repo root to write `./.gemini/` and a managed `./AGENTS.md` block there |
 
 Run `uniam setup` again at any time to re-apply the config — it is **idempotent** and will not overwrite other entries in your agent's config. This will also update installed agent skill files to their latest version.
 
@@ -174,19 +177,19 @@ What happens during re-setup:
 
 - MCP config entries are updated in place
 - installed skill files are overwritten in place
-- managed OpenCode plugin files are overwritten in place in the selected scope
 - project Copilot instructions are overwritten in place when using project setup
+- managed `CLAUDE.md` and managed `AGENTS.md` blocks are updated in place where that agent setup owns them
 
 What does **not** get automatically rewritten everywhere:
 
 - manually maintained project rules such as `AGENTS.md`, `CLAUDE.md`, or `.rules`
-- the Codex `AGENTS.md` snippet if you already have an older Uniam section there
+- older unmanaged Uniam rule blocks that predate the managed markers
 
 That means you usually do **not** need to uninstall first just to avoid duplicate skill files. Skill files are replaced at the same path.
 
 The main place that may need manual refresh is old rules text that lives in repo files. If you want a clean refresh of those older rule blocks, remove or update them manually before re-running setup.
 
-For Codex specifically, `uniam uninstall codex` does not fully clean `.codex/AGENTS.md`; it only removes installed skills and tells you to remove Uniam entries from config and `AGENTS.md` manually.
+For Codex specifically, `uniam uninstall codex` removes the managed Uniam block from `.codex/AGENTS.md`, but still leaves manual cleanup of `.codex/config.toml` to you.
 
 ### Removing Uniam
 
@@ -212,9 +215,8 @@ This removes the Uniam MCP integration for that agent and, where supported, remo
 
 Notes:
 
-- OpenCode uninstall also removes the managed plugin in the selected scope
-- Codex uninstall is only partial and requires manual cleanup of `.codex/config.toml` and `.codex/AGENTS.md`
-- RooCode, Copilot, and some other integrations have platform-specific limits described by the CLI
+- Codex uninstall still requires manual cleanup of `.codex/config.toml`
+- Copilot and some other integrations have platform-specific limits described by the CLI
 
 #### 2. Remove Uniam completely from your machine
 
@@ -247,7 +249,7 @@ Required workflow:
 - During long or decision-heavy work, checkpoint with `uniam_store`.
 - Before finishing meaningful work, store a final note with `uniam_store`.
 - Curate stale or repetitive memory with `uniam_archive`, `uniam_supersede`, `uniam_update_note`, and `uniam_compact`.
-- If Context7 is installed, use it to fetch up-to-date library and framework documentation, current package versions, and dependency compatibility details.
+- Use Context7 MCP for up-to-date library and framework documentation, current package versions, and dependency compatibility details.
 
 Use `uniam_explain_search` when retrieval behavior needs debugging.
 

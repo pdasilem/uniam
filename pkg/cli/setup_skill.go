@@ -7,11 +7,13 @@ import (
 )
 
 const (
-	ripgrepInstructionLine     = "- If ripgrep MCP is installed, use it for exact text matches, literals, identifiers, config keys, and regex-based narrowing.\n"
-	codeSearchInstructionLine  = "- If code-search MCP is installed, use it for broader code discovery, symbol relationships, and cross-file navigation.\n"
-	context7InstructionLine    = "- If Context7 MCP is installed, use it for up-to-date library and framework documentation, current package versions, and dependency compatibility details.\n"
-	gitInstructionLine         = "- If Git MCP is installed, use it for structured repository status, diffs, history, and branch inspection.\n"
-	braveSearchInstructionLine = "- If Brave Search MCP is installed, use it for current external web information.\n"
+	ripgrepInstructionLine     = "- Use ripgrep MCP for exact text matches, literals, identifiers, config keys, and regex-based narrowing.\n"
+	codeSearchInstructionLine  = "- Use code-search MCP for broader code discovery, symbol relationships, and cross-file navigation.\n"
+	context7InstructionLine    = "- Use Context7 MCP for up-to-date library and framework documentation, current package versions, and dependency compatibility details.\n"
+	gitInstructionLine         = "- Use Git MCP for structured repository status, diffs, history, and branch inspection.\n"
+	searxngInstructionLine     = "- Use SearXNG MCP for web search through the configured SearXNG instance.\n"
+	braveSearchInstructionLine = "- Use Brave Search MCP for current web information.\n"
+	firecrawlInstructionLine   = "- Use Firecrawl MCP for page fetch, scraping, crawling, and structured web extraction.\n"
 )
 
 //go:embed skills/uniam/SKILL.md

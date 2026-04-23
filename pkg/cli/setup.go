@@ -2,15 +2,17 @@ package cli
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"uniam/internal/config"
 
@@ -28,22 +30,30 @@ var (
 	setupCtx7Set        bool
 	setupGitMCP         bool
 	setupGitSet         bool
+	setupSearXNG        bool
+	setupSearXNGSet     bool
 	setupBrave          bool
 	setupBraveSet       bool
+	setupFirecrawl      bool
+	setupFirecrawlSet   bool
 	currentSetupOptions setupOptions
 )
 
 type agentFunc func(configDir string, project bool, fastContext bool) (map[string]string, error)
 
 type setupOptions struct {
-	Ripgrep        bool
-	CodeSearch     bool
-	CodeSearchPath string
-	Context7       bool
-	Context7APIKey string
-	Git            bool
-	BraveSearch    bool
-	BraveAPIKey    string
+	Ripgrep         bool
+	CodeSearch      bool
+	CodeSearchPath  string
+	Context7        bool
+	Context7APIKey  string
+	Git             bool
+	SearXNG         bool
+	SearXNGURL      string
+	BraveSearch     bool
+	BraveAPIKey     string
+	Firecrawl       bool
+	FirecrawlAPIKey string
 }
 
 type optionalIntegration struct {
@@ -75,9 +85,19 @@ func optionalIntegrations() []optionalIntegration {
 			description: "Adds structured repository status, diff, history, and branch inspection tools.",
 		},
 		{
+			key:         "searxng",
+			name:        "SearXNG MCP",
+			description: "Adds web search through your existing SearXNG instance.",
+		},
+		{
 			key:         "brave-search",
 			name:        "Brave Search MCP",
 			description: "Adds web search for current external information.",
+		},
+		{
+			key:         "firecrawl",
+			name:        "Firecrawl MCP",
+			description: "Adds web scraping, crawling, extraction, and live page fetch tools.",
 		},
 	}
 }
@@ -154,6 +174,38 @@ func resolveSetupOptions(cfg *config.Config, configPath string) (setupOptions, e
 					cfg.Integrations.GitEnabled = false
 				}
 			}
+		case "searxng":
+			opts.SearXNG = enabled
+			cfg.Integrations.SearXNGEnabled = enabled
+			if enabled {
+				if _, err := exec.LookPath("npx"); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: npx was not found in PATH. Skipping SearXNG MCP.\n")
+					opts.SearXNG = false
+					cfg.Integrations.SearXNGEnabled = false
+					break
+				}
+				url, reused, detected, urlErr := resolveSearXNGURL(reader, cfg.Integrations.SearXNGURL)
+				if urlErr != nil {
+					return opts, urlErr
+				}
+				if url == "" {
+					fmt.Println("SearXNG was requested, but no usable instance URL was configured or detected. Skipping SearXNG MCP.")
+					opts.SearXNG = false
+					cfg.Integrations.SearXNGEnabled = false
+				} else {
+					opts.SearXNGURL = url
+					cfg.Integrations.SearXNGURL = stringPtr(url)
+					opts.BraveSearch = false
+					cfg.Integrations.BraveSearchEnabled = false
+					if reused {
+						fmt.Println("Using saved SearXNG URL from Uniam config.")
+					} else if detected {
+						fmt.Printf("Using detected SearXNG instance at %s.\n", url)
+					} else {
+						fmt.Println("Saved SearXNG URL to Uniam config.")
+					}
+				}
+			}
 		case "brave-search":
 			opts.BraveSearch = enabled
 			cfg.Integrations.BraveSearchEnabled = enabled
@@ -170,10 +222,35 @@ func resolveSetupOptions(cfg *config.Config, configPath string) (setupOptions, e
 				} else {
 					opts.BraveAPIKey = key
 					cfg.Integrations.BraveSearchAPIKey = stringPtr(key)
+					opts.SearXNG = false
+					cfg.Integrations.SearXNGEnabled = false
 					if reused {
 						fmt.Println("Using saved Brave Search API key from Uniam config.")
 					} else {
 						fmt.Println("Saved Brave Search API key to Uniam config.")
+					}
+				}
+			}
+		case "firecrawl":
+			opts.Firecrawl = enabled
+			cfg.Integrations.FirecrawlEnabled = enabled
+			if enabled {
+				key, reused, keyErr := resolveAPIKeyPrompt(reader, "Firecrawl", cfg.Integrations.FirecrawlAPIKey)
+				if keyErr != nil {
+					return opts, keyErr
+				}
+				if key == "" {
+					fmt.Println("Firecrawl was requested, but no API key is configured. Skipping Firecrawl MCP.")
+					opts.Firecrawl = false
+					cfg.Integrations.FirecrawlEnabled = false
+					cfg.Integrations.FirecrawlAPIKey = nil
+				} else {
+					opts.FirecrawlAPIKey = key
+					cfg.Integrations.FirecrawlAPIKey = stringPtr(key)
+					if reused {
+						fmt.Println("Using saved Firecrawl API key from Uniam config.")
+					} else {
+						fmt.Println("Saved Firecrawl API key to Uniam config.")
 					}
 				}
 			}
@@ -205,9 +282,17 @@ func promptOptionalIntegration(reader *bufio.Reader, integration optionalIntegra
 		if setupGitSet {
 			return setupGitMCP, nil
 		}
+	case "searxng":
+		if setupSearXNGSet {
+			return setupSearXNG, nil
+		}
 	case "brave-search":
 		if setupBraveSet {
 			return setupBrave, nil
+		}
+	case "firecrawl":
+		if setupFirecrawlSet {
+			return setupFirecrawl, nil
 		}
 	}
 
@@ -250,11 +335,79 @@ func resolveAPIKeyPrompt(reader *bufio.Reader, label string, saved *string) (key
 	return input, false, nil
 }
 
+func resolveSearXNGURL(reader *bufio.Reader, saved *string) (url string, reused bool, detected bool, err error) {
+	existing := ""
+	if saved != nil {
+		existing = strings.TrimSpace(*saved)
+	}
+
+	if existing != "" {
+		fmt.Print("SearXNG instance URL (press Enter to reuse saved value): ")
+		input, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			return "", false, false, readErr
+		}
+		input = strings.TrimSpace(input)
+		if input == "" {
+			return existing, true, false, nil
+		}
+		return input, false, false, nil
+	}
+
+	if detectedURL := detectLocalSearXNGURL(); detectedURL != "" {
+		fmt.Printf("SearXNG instance URL (press Enter to reuse detected %s): ", detectedURL)
+		input, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			return "", false, false, readErr
+		}
+		input = strings.TrimSpace(input)
+		if input == "" {
+			return detectedURL, false, true, nil
+		}
+		return input, false, false, nil
+	}
+
+	fmt.Print("SearXNG instance URL (leave empty to skip SearXNG, example http://localhost:8213): ")
+	input, readErr := reader.ReadString('\n')
+	if readErr != nil {
+		return "", false, false, readErr
+	}
+
+	return strings.TrimSpace(input), false, false, nil
+}
+
+func detectLocalSearXNGURL() string {
+	candidates := []string{
+		"http://localhost:8213",
+		"http://127.0.0.1:8213",
+		"http://127.0.0.1:8080",
+		"http://localhost:8080",
+	}
+	client := &http.Client{Timeout: 1500 * time.Millisecond}
+	for _, baseURL := range candidates {
+		req, err := http.NewRequest(http.MethodGet, strings.TrimRight(baseURL, "/")+"/search?q=uniam&format=json", nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusOK && strings.Contains(string(body), "\"results\"") {
+			return baseURL
+		}
+	}
+
+	return ""
+}
+
 func runAgentCmd(agent string, handlers map[string]agentFunc, configDir string, project bool, isSetup bool) {
 	fn, ok := handlers[agent]
 	if !ok {
 		fmt.Fprintf(os.Stderr, "Error: unknown agent: %s\n", agent)
-		fmt.Fprintf(os.Stderr, "Supported agents: claude-code, cursor, windsurf, antigravity, codex, opencode, roocode, copilot, gemini-cli\n")
+		fmt.Fprintf(os.Stderr, "Supported agents: claude-code, cursor, windsurf, antigravity, codex, opencode, copilot, gemini-cli\n")
 		os.Exit(1)
 	}
 
@@ -294,7 +447,9 @@ var setupCmd = &cobra.Command{
 		setupCodeSet = cmd.Flags().Changed("code-search")
 		setupCtx7Set = cmd.Flags().Changed("context7")
 		setupGitSet = cmd.Flags().Changed("git-mcp")
+		setupSearXNGSet = cmd.Flags().Changed("searxng")
 		setupBraveSet = cmd.Flags().Changed("brave-search")
+		setupFirecrawlSet = cmd.Flags().Changed("firecrawl")
 		runAgentCmd(args[0], map[string]agentFunc{
 			"claude-code": setupClaudeCode,
 			"cursor":      setupCursor,
@@ -309,7 +464,6 @@ var setupCmd = &cobra.Command{
 				}
 				return setupOpenCode(project, fast)
 			},
-			"roocode": setupRooCode,
 		}, setupConfigDir, setupProject, true)
 	},
 }
@@ -324,7 +478,9 @@ var uninstallCmd = &cobra.Command{
 		setupCodeSet = false
 		setupCtx7Set = false
 		setupGitSet = false
+		setupSearXNGSet = false
 		setupBraveSet = false
+		setupFirecrawlSet = false
 		currentSetupOptions = setupOptions{}
 		runAgentCmd(args[0], map[string]agentFunc{
 			"claude-code": uninstallClaudeCode,
@@ -340,7 +496,6 @@ var uninstallCmd = &cobra.Command{
 				}
 				return uninstallOpenCode(project)
 			},
-			"roocode": uninstallRooCode,
 		}, setupConfigDir, setupProject, false)
 	},
 }
@@ -352,7 +507,9 @@ func init() {
 	setupCmd.Flags().BoolVar(&setupCodeSearch, "code-search", false, "Also install the code-search MCP server")
 	setupCmd.Flags().BoolVar(&setupContext7, "context7", false, "Also install the Context7 MCP server")
 	setupCmd.Flags().BoolVar(&setupGitMCP, "git-mcp", false, "Also install the Git MCP server")
+	setupCmd.Flags().BoolVar(&setupSearXNG, "searxng", false, "Also install the SearXNG MCP server")
 	setupCmd.Flags().BoolVar(&setupBrave, "brave-search", false, "Also install the Brave Search MCP server")
+	setupCmd.Flags().BoolVar(&setupFirecrawl, "firecrawl", false, "Also install the Firecrawl MCP server")
 	uninstallCmd.Flags().StringVar(&setupConfigDir, "config-dir", "", "Path to agent config directory")
 	uninstallCmd.Flags().BoolVarP(&setupProject, "project", "p", false, "Uninstall from current project instead of globally")
 }
@@ -481,8 +638,14 @@ func integrationInstructionLines(opts setupOptions) string {
 	if opts.Git {
 		lines += gitInstructionLine
 	}
+	if opts.SearXNG {
+		lines += searxngInstructionLine
+	}
 	if opts.BraveSearch {
 		lines += braveSearchInstructionLine
+	}
+	if opts.Firecrawl {
+		lines += firecrawlInstructionLine
 	}
 
 	return lines
@@ -510,29 +673,22 @@ func enabledIntegrationLabels() []string {
 	if currentSetupOptions.Git {
 		extras = append(extras, "Git MCP")
 	}
+	if currentSetupOptions.SearXNG {
+		extras = append(extras, "SearXNG")
+	}
 	if currentSetupOptions.BraveSearch {
 		extras = append(extras, "Brave Search")
+	}
+	if currentSetupOptions.Firecrawl {
+		extras = append(extras, "Firecrawl")
 	}
 
 	return extras
 }
 
-func codexAgentsSection(opts setupOptions) string {
-	section := "## Uniam\n\nUse Uniam for cross-session memory.\n\n" +
-		"Required:\n" +
-		"- Retrieve before meaningful work.\n" +
-		"- Checkpoint during long or decision-heavy work.\n" +
-		"- Store again before finishing meaningful work.\n" +
-		"- Curate stale or repetitive memory when needed.\n"
-	section += integrationInstructionLines(opts)
-	section += "- Never operate outside the current project or folder scope.\n"
-
-	return section
-}
-
 func openCodeAgentsManagedBlock(opts setupOptions) string {
 	return "<!-- uniam:begin opencode -->\n" +
-		codexAgentsSection(opts) +
+		compactUniamSection(opts) +
 		"<!-- uniam:end opencode -->\n"
 }
 
@@ -608,16 +764,6 @@ func removeManagedBlock(path string, marker string) error {
 
 	text += "\n"
 	return os.WriteFile(path, []byte(text), 0644)
-}
-
-func installOpenCodePlugin(target string) error {
-	pluginsDir := filepath.Join(target, "plugins")
-	if err := os.MkdirAll(pluginsDir, 0755); err != nil {
-		return fmt.Errorf("failed to create OpenCode plugin directory: %w", err)
-	}
-
-	path := filepath.Join(pluginsDir, openCodePluginFileName)
-	return os.WriteFile(path, openCodePluginContent, 0644)
 }
 
 func removeFileIfExists(path string) (bool, error) {
@@ -705,6 +851,34 @@ func addBraveSearchServer(mcpServers map[string]any, apiKey string) {
 	}
 }
 
+func addSearXNGServer(mcpServers map[string]any, baseURL string) {
+	if strings.TrimSpace(baseURL) == "" {
+		return
+	}
+
+	mcpServers["searxng"] = map[string]any{
+		"command": "npx",
+		"args":    []string{"-y", "mcp-searxng"},
+		"env": map[string]any{
+			"SEARXNG_URL": baseURL,
+		},
+	}
+}
+
+func addFirecrawlServer(mcpServers map[string]any, apiKey string) {
+	if strings.TrimSpace(apiKey) == "" {
+		return
+	}
+
+	mcpServers["firecrawl"] = map[string]any{
+		"command": "npx",
+		"args":    []string{"-y", "firecrawl-mcp"},
+		"env": map[string]any{
+			"FIRECRAWL_API_KEY": apiKey,
+		},
+	}
+}
+
 func addOpenCodeContext7Server(mcp map[string]any, apiKey string) {
 	if strings.TrimSpace(apiKey) == "" {
 		return
@@ -713,7 +887,7 @@ func addOpenCodeContext7Server(mcp map[string]any, apiKey string) {
 	mcp["context7"] = map[string]any{
 		"type":    "local",
 		"command": []string{"npx", "-y", "@upstash/context7-mcp"},
-		"env": map[string]any{
+		"environment": map[string]any{
 			"CONTEXT7_API_KEY": apiKey,
 		},
 	}
@@ -753,8 +927,36 @@ func addOpenCodeBraveSearchServer(mcp map[string]any, apiKey string) {
 	mcp["brave-search"] = map[string]any{
 		"type":    "local",
 		"command": []string{"npx", "-y", "@brave/brave-search-mcp-server", "--transport", "stdio"},
-		"env": map[string]any{
+		"environment": map[string]any{
 			"BRAVE_API_KEY": apiKey,
+		},
+	}
+}
+
+func addOpenCodeSearXNGServer(mcp map[string]any, baseURL string) {
+	if strings.TrimSpace(baseURL) == "" {
+		return
+	}
+
+	mcp["searxng"] = map[string]any{
+		"type":    "local",
+		"command": []string{"npx", "-y", "mcp-searxng"},
+		"environment": map[string]any{
+			"SEARXNG_URL": baseURL,
+		},
+	}
+}
+
+func addOpenCodeFirecrawlServer(mcp map[string]any, apiKey string) {
+	if strings.TrimSpace(apiKey) == "" {
+		return
+	}
+
+	mcp["firecrawl"] = map[string]any{
+		"type":    "local",
+		"command": []string{"npx", "-y", "firecrawl-mcp"},
+		"environment": map[string]any{
+			"FIRECRAWL_API_KEY": apiKey,
 		},
 	}
 }
@@ -772,8 +974,14 @@ func addOptionalServers(mcpServers map[string]any) {
 	if currentSetupOptions.Git {
 		addGitServer(mcpServers)
 	}
+	if currentSetupOptions.SearXNG {
+		addSearXNGServer(mcpServers, currentSetupOptions.SearXNGURL)
+	}
 	if currentSetupOptions.BraveSearch {
 		addBraveSearchServer(mcpServers, currentSetupOptions.BraveAPIKey)
+	}
+	if currentSetupOptions.Firecrawl {
+		addFirecrawlServer(mcpServers, currentSetupOptions.FirecrawlAPIKey)
 	}
 }
 
@@ -790,13 +998,19 @@ func addOpenCodeOptionalServers(mcp map[string]any) {
 	if currentSetupOptions.Git {
 		addOpenCodeGitServer(mcp)
 	}
+	if currentSetupOptions.SearXNG {
+		addOpenCodeSearXNGServer(mcp, currentSetupOptions.SearXNGURL)
+	}
 	if currentSetupOptions.BraveSearch {
 		addOpenCodeBraveSearchServer(mcp, currentSetupOptions.BraveAPIKey)
+	}
+	if currentSetupOptions.Firecrawl {
+		addOpenCodeFirecrawlServer(mcp, currentSetupOptions.FirecrawlAPIKey)
 	}
 }
 
 func optionalMCPServerKeys() []string {
-	return []string{"context7", "ripgrep", "code-search", "git", "brave-search"}
+	return []string{"context7", "ripgrep", "code-search", "git", "searxng", "brave-search", "firecrawl"}
 }
 
 func setupClaudeCode(configDir string, project bool, _ bool) (map[string]string, error) {
@@ -834,6 +1048,14 @@ func setupClaudeCode(configDir string, project bool, _ bool) (map[string]string,
 	if installSkill(skillTarget) {
 		extras = append(extras, "skill")
 	}
+	claudePath, err := claudeMemoryPath(project)
+	if err != nil {
+		return nil, err
+	}
+	if err := upsertManagedBlockWithLegacy(claudePath, "claude", claudeManagedBlock(currentSetupOptions), verboseUniamLegacyPrefix); err != nil {
+		return nil, fmt.Errorf("failed to write CLAUDE.md: %w", err)
+	}
+	extras = append(extras, "CLAUDE.md")
 	extras = append(extras, enabledIntegrationLabels()...)
 
 	return map[string]string{"message": setupMessage("Claude Code", configPath, extras...)}, nil
@@ -948,6 +1170,16 @@ func setupCursor(configDir string, project bool, _ bool) (map[string]string, err
 	var extras []string
 	if installSkill(target) {
 		extras = append(extras, "skill")
+	}
+	if project {
+		agentsPath, pathErr := projectRootFile("AGENTS.md")
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		if err := upsertManagedBlockWithLegacy(agentsPath, "agents", sharedAgentsManagedBlock(currentSetupOptions), compactUniamLegacyPrefix); err != nil {
+			return nil, fmt.Errorf("failed to write project AGENTS.md: %w", err)
+		}
+		extras = append(extras, "AGENTS.md")
 	}
 	extras = append(extras, enabledIntegrationLabels()...)
 
@@ -1115,19 +1347,8 @@ func setupCodex(configDir string, project bool, _ bool) (map[string]string, erro
 		return nil, fmt.Errorf("failed to write config: %w", err)
 	}
 
-	// Add to AGENTS.md (idempotent).
-	existingAgents, _ := os.ReadFile(agentsPath)
-	if !bytes.Contains(existingAgents, []byte("## Uniam")) {
-		f2, err := os.OpenFile(agentsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err == nil {
-			if _, err := f2.WriteString(codexAgentsSection(currentSetupOptions)); err != nil {
-				_ = f2.Close()
-				return nil, fmt.Errorf("failed to write AGENTS.md: %w", err)
-			}
-			if err := f2.Close(); err != nil {
-				return nil, fmt.Errorf("failed to close AGENTS.md: %w", err)
-			}
-		}
+	if err := upsertManagedBlockWithLegacy(agentsPath, "codex", codexManagedBlock(currentSetupOptions), compactUniamLegacyPrefix); err != nil {
+		return nil, fmt.Errorf("failed to write AGENTS.md: %w", err)
 	}
 
 	var extras []string
@@ -1196,10 +1417,22 @@ func codexOptionalBlocks() []codexServerBlock {
 			body: "\n[mcp_servers.git]\ncommand = \"uvx\"\nargs = [\"mcp-server-git\"]\n",
 		})
 	}
+	if currentSetupOptions.SearXNG && strings.TrimSpace(currentSetupOptions.SearXNGURL) != "" {
+		blocks = append(blocks, codexServerBlock{
+			name: "searxng",
+			body: fmt.Sprintf("\n[mcp_servers.searxng]\ncommand = \"npx\"\nargs = [\"-y\", \"mcp-searxng\"]\nenv = { SEARXNG_URL = %q }\n", currentSetupOptions.SearXNGURL),
+		})
+	}
 	if currentSetupOptions.BraveSearch && strings.TrimSpace(currentSetupOptions.BraveAPIKey) != "" {
 		blocks = append(blocks, codexServerBlock{
 			name: "brave-search",
 			body: fmt.Sprintf("\n[mcp_servers.brave-search]\ncommand = \"npx\"\nargs = [\"-y\", \"@brave/brave-search-mcp-server\", \"--transport\", \"stdio\"]\nenv = { BRAVE_API_KEY = %q }\n", currentSetupOptions.BraveAPIKey),
+		})
+	}
+	if currentSetupOptions.Firecrawl && strings.TrimSpace(currentSetupOptions.FirecrawlAPIKey) != "" {
+		blocks = append(blocks, codexServerBlock{
+			name: "firecrawl",
+			body: fmt.Sprintf("\n[mcp_servers.firecrawl]\ncommand = \"npx\"\nargs = [\"-y\", \"firecrawl-mcp\"]\nenv = { FIRECRAWL_API_KEY = %q }\n", currentSetupOptions.FirecrawlAPIKey),
 		})
 	}
 
@@ -1259,11 +1492,13 @@ func setupOpenCode(project bool, _ bool) (map[string]string, error) {
 		return nil, fmt.Errorf("failed to remove legacy OpenCode instructions: %w", err)
 	}
 
-	if err := installOpenCodePlugin(target); err != nil {
-		return nil, fmt.Errorf("failed to write OpenCode plugin: %w", err)
+	openCodeMarker := "opencode"
+	openCodeBlock := openCodeAgentsManagedBlock(currentSetupOptions)
+	if project {
+		openCodeMarker = "agents"
+		openCodeBlock = sharedAgentsManagedBlock(currentSetupOptions)
 	}
-
-	if err := upsertManagedBlock(agentsPath, "opencode", openCodeAgentsManagedBlock(currentSetupOptions)); err != nil {
+	if err := upsertManagedBlockWithLegacy(agentsPath, openCodeMarker, openCodeBlock, compactUniamLegacyPrefix); err != nil {
 		return nil, fmt.Errorf("failed to write OpenCode AGENTS.md: %w", err)
 	}
 
@@ -1277,7 +1512,7 @@ func setupOpenCode(project bool, _ bool) (map[string]string, error) {
 
 	var extras []string
 	extras = append(extras, enabledIntegrationLabels()...)
-	extras = append([]string{"plugin", "AGENTS.md", "skill"}, extras...)
+	extras = append([]string{"AGENTS.md", "skill"}, extras...)
 	return map[string]string{"message": setupMessage("OpenCode", target, extras...)}, nil
 }
 
@@ -1341,6 +1576,14 @@ func uninstallClaudeCode(configDir string, project bool, _ bool) (map[string]str
 	if uninstallSkill(skillTarget) {
 		extras = append(extras, "skill")
 	}
+	claudePath, pathErr := claudeMemoryPath(project)
+	if pathErr != nil {
+		return nil, pathErr
+	}
+	if err := removeManagedBlock(claudePath, "claude"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("failed to remove CLAUDE.md block: %w", err)
+	}
+	extras = append(extras, "CLAUDE.md")
 
 	return map[string]string{"message": uninstallMessage("Claude Code", configPath, extras...)}, nil
 }
@@ -1360,6 +1603,16 @@ func uninstallCursor(configDir string, project bool, _ bool) (map[string]string,
 	var extras []string
 	if uninstallSkill(target) {
 		extras = append(extras, "skill")
+	}
+	if project {
+		agentsPath, pathErr := projectRootFile("AGENTS.md")
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		if err := removeManagedBlock(agentsPath, "agents"); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("failed to remove project AGENTS.md block: %w", err)
+		}
+		extras = append(extras, "AGENTS.md")
 	}
 
 	return map[string]string{"message": uninstallMessage("Cursor", configPath, extras...)}, nil
@@ -1451,7 +1704,11 @@ func uninstallAntigravity(configDir string, project bool, _ bool) (map[string]st
 func uninstallCodex(configDir string, project bool, _ bool) (map[string]string, error) {
 	target := resolveConfigDir(".codex", configDir, project)
 
-	msg := "Codex uninstall: manually remove Uniam and optional MCP entries from .codex/config.toml and AGENTS.md"
+	msg := "Codex uninstall: manually remove Uniam and optional MCP entries from .codex/config.toml"
+
+	if err := removeManagedBlock(filepath.Join(target, "AGENTS.md"), "codex"); err == nil {
+		msg += ". Removed AGENTS.md block."
+	}
 
 	if uninstallSkill(target) {
 		msg += ". Removed skill."
@@ -1513,10 +1770,11 @@ func uninstallOpenCode(project bool) (map[string]string, error) {
 	if _, err := removeFileIfExists(filepath.Join(target, openCodeInstructionsFileName)); err != nil {
 		return nil, fmt.Errorf("failed to remove OpenCode instructions: %w", err)
 	}
-	if _, err := removeFileIfExists(filepath.Join(target, "plugins", openCodePluginFileName)); err != nil {
-		return nil, fmt.Errorf("failed to remove OpenCode plugin: %w", err)
+	openCodeMarker := "opencode"
+	if project {
+		openCodeMarker = "agents"
 	}
-	if err := removeManagedBlock(agentsPath, "opencode"); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := removeManagedBlock(agentsPath, openCodeMarker); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("failed to remove OpenCode AGENTS.md block: %w", err)
 	}
 	if !uninstallSkill(target) {
@@ -1527,112 +1785,7 @@ func uninstallOpenCode(project bool) (map[string]string, error) {
 	}
 
 	return map[string]string{
-		"message": uninstallMessage("OpenCode", target, "plugin", "AGENTS.md", "skill"),
-	}, nil
-}
-
-func setupRooCode(configDir string, project bool, _ bool) (map[string]string, error) {
-	var target string
-	//nolint:gocritic
-	if configDir != "" {
-		target = configDir
-	} else if project {
-		cwd, _ := os.Getwd()
-		target = filepath.Join(cwd, ".roo")
-	} else {
-		return nil, errors.New("RooCode global MCP config is managed via VS Code settings.\nUse --project (-p) to install in the current project's .roo/mcp.json instead")
-	}
-
-	configPath := filepath.Join(target, "mcp.json")
-
-	var decoded map[string]any
-	if data, err := os.ReadFile(configPath); err == nil {
-		if err := json.Unmarshal(data, &decoded); err != nil {
-			return nil, fmt.Errorf("failed to parse existing config: %w", err)
-		}
-	} else {
-		decoded = make(map[string]any)
-	}
-
-	mcpServers, _ := decoded["mcpServers"].(map[string]any)
-	if mcpServers == nil {
-		mcpServers = make(map[string]any)
-		decoded["mcpServers"] = mcpServers
-	}
-
-	mcpServers["uniam"] = map[string]any{
-		"command": "uniam",
-		"args":    []string{"mcp"},
-	}
-
-	addOptionalServers(mcpServers)
-
-	if err := os.MkdirAll(target, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	data, err := json.MarshalIndent(decoded, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal config: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return nil, fmt.Errorf("failed to write config: %w", err)
-	}
-
-	var extras []string
-	extras = append(extras, enabledIntegrationLabels()...)
-	return map[string]string{
-		"message": setupMessage("RooCode", configPath, extras...),
-	}, nil
-}
-
-func uninstallRooCode(configDir string, project bool, _ bool) (map[string]string, error) {
-	var target string
-	//nolint:gocritic
-	if configDir != "" {
-		target = configDir
-	} else if project {
-		cwd, _ := os.Getwd()
-		target = filepath.Join(cwd, ".roo")
-	} else {
-		return nil, errors.New("RooCode global MCP config is managed via VS Code settings.\nUse --project (-p) to uninstall from the current project's .roo/mcp.json instead")
-	}
-
-	configPath := filepath.Join(target, "mcp.json")
-
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return map[string]string{"message": "Uniam not found in RooCode config"}, nil
-	}
-
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config: %w", err)
-	}
-
-	var decoded map[string]any
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-
-	if mcpServers, ok := decoded["mcpServers"].(map[string]any); ok {
-		delete(mcpServers, "uniam")
-		for _, key := range optionalMCPServerKeys() {
-			delete(mcpServers, key)
-		}
-	}
-
-	newData, err := json.MarshalIndent(decoded, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal config: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, newData, 0644); err != nil {
-		return nil, fmt.Errorf("failed to write config: %w", err)
-	}
-
-	return map[string]string{
-		"message": uninstallMessage("RooCode", configPath),
+		"message": uninstallMessage("OpenCode", target, "AGENTS.md", "skill"),
 	}, nil
 }
 
@@ -1799,6 +1952,9 @@ func setupGeminiCli(_ string, project bool, _ bool) (map[string]string, error) {
 	if err := writeClaudeJSONUserMCP(configPath, mcpEntry); err != nil {
 		return nil, fmt.Errorf("failed to write settings.json: %w", err)
 	}
+	if err := ensureGeminiContextFilenames(configPath); err != nil {
+		return nil, err
+	}
 
 	var agentHome string
 	if project {
@@ -1812,8 +1968,22 @@ func setupGeminiCli(_ string, project bool, _ bool) (map[string]string, error) {
 	if !installSkill(agentHome) {
 		return nil, fmt.Errorf("failed to install skill in %s", agentHome)
 	}
+	agentsPath, pathErr := geminiAgentsPath(project)
+	if pathErr != nil {
+		return nil, pathErr
+	}
+	blockMarker := "gemini"
+	block := geminiManagedBlock(currentSetupOptions)
+	if project {
+		blockMarker = "agents"
+		block = sharedAgentsManagedBlock(currentSetupOptions)
+	}
+	if err := upsertManagedBlockWithLegacy(agentsPath, blockMarker, block, compactUniamLegacyPrefix); err != nil {
+		return nil, fmt.Errorf("failed to write Gemini CLI AGENTS.md: %w", err)
+	}
 	var extras []string
 	extras = append(extras, "skill")
+	extras = append(extras, "AGENTS.md")
 	extras = append(extras, enabledIntegrationLabels()...)
 
 	return map[string]string{"message": setupMessage("Gemini CLI", configPath, extras...)}, nil
@@ -1848,8 +2018,19 @@ func uninstallGeminiCli(_ string, project bool, _ bool) (map[string]string, erro
 			return nil, fmt.Errorf("failed to remove Gemini CLI skill from %s", agentHome)
 		}
 	}
+	agentsPath, pathErr := geminiAgentsPath(project)
+	if pathErr != nil {
+		return nil, pathErr
+	}
+	blockMarker := "gemini"
+	if project {
+		blockMarker = "agents"
+	}
+	if err := removeManagedBlock(agentsPath, blockMarker); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("failed to remove Gemini CLI AGENTS.md block: %w", err)
+	}
 
 	return map[string]string{
-		"message": uninstallMessage("Gemini CLI", configPath),
+		"message": uninstallMessage("Gemini CLI", configPath, "AGENTS.md"),
 	}, nil
 }

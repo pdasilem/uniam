@@ -510,7 +510,6 @@ Supported targets in code:
 - Antigravity
 - Codex / Codex CLI
 - OpenCode
-- RooCode
 - GitHub Copilot
 - Gemini CLI
 
