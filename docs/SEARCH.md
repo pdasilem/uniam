@@ -157,7 +157,7 @@ Use it when an agent needs current external information from the web.
   "command": "npx",
   "args": ["-y", "mcp-searxng"],
   "env": {
-    "SEARXNG_URL": "http://127.0.0.1:8080"
+    "SEARXNG_URL": "http://localhost:8213"
   }
 }
 ```

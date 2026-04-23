@@ -112,12 +112,13 @@ func loadUniamConfigForSetup() (*config.Config, string, error) {
 	return cfg, configPath, nil
 }
 
-func resolveSetupOptions(cfg *config.Config, configPath string) (setupOptions, error) {
+func resolveSetupOptions(cfg *config.Config, configPath string, promptCtx *setupPromptContext) (setupOptions, error) {
 	opts := setupOptions{}
 
 	reader := bufio.NewReader(os.Stdin)
 	for _, integration := range optionalIntegrations() {
-		enabled, err := promptOptionalIntegration(reader, integration)
+		status := inspectIntegrationPromptStatus(promptCtx, integration, cfg)
+		enabled, err := promptOptionalIntegration(reader, integration, status)
 		if err != nil {
 			return opts, err
 		}
@@ -264,7 +265,7 @@ func resolveSetupOptions(cfg *config.Config, configPath string) (setupOptions, e
 	return opts, nil
 }
 
-func promptOptionalIntegration(reader *bufio.Reader, integration optionalIntegration) (bool, error) {
+func promptOptionalIntegration(reader *bufio.Reader, integration optionalIntegration, status integrationPromptStatus) (bool, error) {
 	switch integration.key {
 	case "ripgrep":
 		if setupRipgrepSet {
@@ -297,6 +298,12 @@ func promptOptionalIntegration(reader *bufio.Reader, integration optionalIntegra
 	}
 
 	fmt.Printf("%s: %s\n", integration.name, integration.description)
+	if strings.TrimSpace(status.summary) != "" {
+		fmt.Printf("Current status: %s\n", status.summary)
+		for _, detail := range status.details {
+			fmt.Printf("%s\n", detail)
+		}
+	}
 	fmt.Printf("Install %s? yes/no (default no): ", integration.name)
 	response, err := reader.ReadString('\n')
 	if err != nil {
@@ -419,7 +426,8 @@ func runAgentCmd(agent string, handlers map[string]agentFunc, configDir string, 
 			fmt.Fprintf(os.Stderr, "Warning: failed to load Uniam config: %v\n", err)
 			cfg = &config.Config{}
 		}
-		currentSetupOptions, err = resolveSetupOptions(cfg, cfgPath)
+		promptCtx := buildSetupPromptContext(agent, configDir, project)
+		currentSetupOptions, err = resolveSetupOptions(cfg, cfgPath, promptCtx)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
