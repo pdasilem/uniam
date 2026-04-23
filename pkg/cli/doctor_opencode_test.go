@@ -15,12 +15,12 @@ func TestNewOpenCodePaths(t *testing.T) {
 		t.Fatalf("ConfigPath = %q, want %q", got, want)
 	}
 
-	if got, want := paths.SkillPath, filepath.Join("/tmp/home", ".config", "opencode", "skills", "uniam", "SKILL.md"); got != want {
-		t.Fatalf("SkillPath = %q, want %q", got, want)
+	if got, want := paths.AgentsPath, filepath.Join("/tmp/home", ".config", "opencode", "AGENTS.md"); got != want {
+		t.Fatalf("AgentsPath = %q, want %q", got, want)
 	}
 
-	if got, want := paths.InstructionsPath, filepath.Join("/tmp/home", ".config", "opencode", "uniam-instructions.md"); got != want {
-		t.Fatalf("InstructionsPath = %q, want %q", got, want)
+	if got, want := paths.SkillPath, filepath.Join("/tmp/home", ".config", "opencode", "skills", "uniam", "SKILL.md"); got != want {
+		t.Fatalf("SkillPath = %q, want %q", got, want)
 	}
 
 	if got, want := paths.PluginPath, filepath.Join("/tmp/home", ".config", "opencode", "plugins", "uniam.js"); got != want {

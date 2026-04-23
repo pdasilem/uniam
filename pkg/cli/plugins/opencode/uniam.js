@@ -19,16 +19,12 @@ export const UniamPlugin = async ({ client }) => {
     const key = String(sessionID || "global")
     if (!sessions.has(key)) {
       sessions.set(key, {
-        retrieved: false,
         dirty: false,
         maintained: false,
-        lastReminder: "",
       })
     }
     return sessions.get(key)
   }
-
-  const reminder = "Uniam required: retrieve before work, store after meaningful work, and stay inside the current project scope."
 
   const log = async (level, message, extra) => {
     await client.app.log({
@@ -51,7 +47,6 @@ export const UniamPlugin = async ({ client }) => {
       const tool = getToolName(input)
 
       if (tool === "uniam_context" || tool === "uniam_search" || tool === "uniam_retrieve") {
-        state.retrieved = true
         await log("info", "Marked session as retrieved", { tool })
         return
       }
@@ -59,7 +54,6 @@ export const UniamPlugin = async ({ client }) => {
       if (tool === "uniam_store") {
         state.dirty = false
         state.maintained = false
-        state.lastReminder = ""
         await log("info", "Marked session checkpointed", {})
         return
       }
@@ -81,7 +75,6 @@ export const UniamPlugin = async ({ client }) => {
       if (!state.dirty) {
         return
       }
-      state.lastReminder = reminder
       await log("warn", "Session idle without Uniam checkpoint", {})
     },
 
@@ -90,15 +83,7 @@ export const UniamPlugin = async ({ client }) => {
       if (!state.dirty) {
         return
       }
-      state.lastReminder = reminder
       await log("warn", "Session compacted without Uniam checkpoint", {})
-    },
-
-    "tui.prompt.append": async (input, output) => {
-      const state = ensure(getSessionID(input))
-      if (!state.retrieved || state.dirty) {
-        output.text = `${output.text || ""}\n\n[Uniam policy] ${state.lastReminder || reminder}`
-      }
     },
   }
 }

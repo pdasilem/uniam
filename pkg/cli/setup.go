@@ -400,6 +400,19 @@ func openCodeInstallPaths(project bool) (target string, configPath string, instr
 	return target, filepath.Join(target, "opencode.json"), "./" + openCodeInstructionsFileName, nil
 }
 
+func openCodeAgentsPath(project bool, target string) (string, error) {
+	if project {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve current directory: %w", err)
+		}
+
+		return filepath.Join(cwd, "AGENTS.md"), nil
+	}
+
+	return filepath.Join(target, "AGENTS.md"), nil
+}
+
 func readJSONMap(path string) (map[string]any, error) {
 	if data, err := os.ReadFile(path); err == nil {
 		var decoded map[string]any
@@ -517,6 +530,12 @@ func codexAgentsSection(opts setupOptions) string {
 	return section
 }
 
+func openCodeAgentsManagedBlock(opts setupOptions) string {
+	return "<!-- uniam:begin opencode -->\n" +
+		codexAgentsSection(opts) +
+		"<!-- uniam:end opencode -->\n"
+}
+
 func copilotRepoInstructionsManagedBlock(opts setupOptions) string {
 	block := "<!-- uniam:begin copilot -->\n" +
 		"## Uniam\n\n" +
@@ -589,14 +608,6 @@ func removeManagedBlock(path string, marker string) error {
 
 	text += "\n"
 	return os.WriteFile(path, []byte(text), 0644)
-}
-
-func installOpenCodeInstructions(target string) error {
-	path := filepath.Join(target, openCodeInstructionsFileName)
-	content := string(openCodeInstructionsContent)
-	content = insertInstructionLines(content, "- Use `uniam_explain_search` only when retrieval behavior needs debugging.\n", integrationInstructionLines(currentSetupOptions))
-
-	return os.WriteFile(path, []byte(content), 0644)
 }
 
 func installOpenCodePlugin(target string) error {
@@ -1200,6 +1211,10 @@ func setupOpenCode(project bool, _ bool) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	agentsPath, err := openCodeAgentsPath(project, target)
+	if err != nil {
+		return nil, err
+	}
 
 	decoded, err := readJSONMap(configPath)
 	if err != nil {
@@ -1219,33 +1234,37 @@ func setupOpenCode(project bool, _ bool) (map[string]string, error) {
 	addOpenCodeOptionalServers(mcp)
 
 	instructions, _ := decoded["instructions"].([]any)
-	if instructions == nil {
-		instructions = make([]any, 0, 1)
-	}
-	stringInstructions := make([]string, 0, len(instructions))
-	for _, instruction := range instructions {
-		value, ok := instruction.(string)
-		if ok {
-			stringInstructions = append(stringInstructions, value)
+	if instructions != nil {
+		filtered := make([]any, 0, len(instructions))
+		for _, instruction := range instructions {
+			value, ok := instruction.(string)
+			if ok && value == instructionRef {
+				continue
+			}
+
+			filtered = append(filtered, instruction)
+		}
+		if len(filtered) == 0 {
+			delete(decoded, "instructions")
+		} else {
+			decoded["instructions"] = filtered
 		}
 	}
-	stringInstructions = appendUniqueString(stringInstructions, instructionRef)
-	normalizedInstructions := make([]any, 0, len(stringInstructions))
-	for _, instruction := range stringInstructions {
-		normalizedInstructions = append(normalizedInstructions, instruction)
-	}
-	decoded["instructions"] = normalizedInstructions
 
 	if err := os.MkdirAll(target, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	if err := installOpenCodeInstructions(target); err != nil {
-		return nil, fmt.Errorf("failed to write OpenCode instructions: %w", err)
+	if _, err := removeFileIfExists(filepath.Join(target, openCodeInstructionsFileName)); err != nil {
+		return nil, fmt.Errorf("failed to remove legacy OpenCode instructions: %w", err)
 	}
 
 	if err := installOpenCodePlugin(target); err != nil {
 		return nil, fmt.Errorf("failed to write OpenCode plugin: %w", err)
+	}
+
+	if err := upsertManagedBlock(agentsPath, "opencode", openCodeAgentsManagedBlock(currentSetupOptions)); err != nil {
+		return nil, fmt.Errorf("failed to write OpenCode AGENTS.md: %w", err)
 	}
 
 	if !installSkill(target) {
@@ -1258,7 +1277,7 @@ func setupOpenCode(project bool, _ bool) (map[string]string, error) {
 
 	var extras []string
 	extras = append(extras, enabledIntegrationLabels()...)
-	extras = append([]string{"instructions", "plugin", "skill"}, extras...)
+	extras = append([]string{"plugin", "AGENTS.md", "skill"}, extras...)
 	return map[string]string{"message": setupMessage("OpenCode", target, extras...)}, nil
 }
 
@@ -1446,6 +1465,10 @@ func uninstallOpenCode(project bool) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	agentsPath, err := openCodeAgentsPath(project, target)
+	if err != nil {
+		return nil, err
+	}
 
 	_, statErr := os.Stat(configPath)
 	configExists := !errors.Is(statErr, os.ErrNotExist)
@@ -1493,6 +1516,9 @@ func uninstallOpenCode(project bool) (map[string]string, error) {
 	if _, err := removeFileIfExists(filepath.Join(target, "plugins", openCodePluginFileName)); err != nil {
 		return nil, fmt.Errorf("failed to remove OpenCode plugin: %w", err)
 	}
+	if err := removeManagedBlock(agentsPath, "opencode"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("failed to remove OpenCode AGENTS.md block: %w", err)
+	}
 	if !uninstallSkill(target) {
 		skillPath := filepath.Join(target, "skills", "uniam", "SKILL.md")
 		if _, err := os.Stat(skillPath); err == nil {
@@ -1501,7 +1527,7 @@ func uninstallOpenCode(project bool) (map[string]string, error) {
 	}
 
 	return map[string]string{
-		"message": uninstallMessage("OpenCode", target, "instructions", "plugin", "skill"),
+		"message": uninstallMessage("OpenCode", target, "plugin", "AGENTS.md", "skill"),
 	}, nil
 }
 

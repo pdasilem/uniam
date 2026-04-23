@@ -174,7 +174,7 @@ What happens during re-setup:
 
 - MCP config entries are updated in place
 - installed skill files are overwritten in place
-- managed OpenCode instructions and plugin files are overwritten in place in the selected scope
+- managed OpenCode plugin files are overwritten in place in the selected scope
 - project Copilot instructions are overwritten in place when using project setup
 
 What does **not** get automatically rewritten everywhere:
@@ -212,7 +212,7 @@ This removes the Uniam MCP integration for that agent and, where supported, remo
 
 Notes:
 
-- OpenCode uninstall also removes the managed instructions file and plugin in the selected scope
+- OpenCode uninstall also removes the managed plugin in the selected scope
 - Codex uninstall is only partial and requires manual cleanup of `.codex/config.toml` and `.codex/AGENTS.md`
 - RooCode, Copilot, and some other integrations have platform-specific limits described by the CLI
 

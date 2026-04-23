@@ -172,21 +172,6 @@ var doctorCmd = &cobra.Command{
 			pass(".uniamignore patterns", fmt.Sprintf("%d custom patterns", len(patterns)))
 		}
 
-		// --- Project instructions ---
-		fmt.Println("\nProject instructions:")
-		rulesFiles := []string{"AGENTS.md", "CLAUDE.md", ".rules"}
-		foundRule := false
-		for _, name := range rulesFiles {
-			if _, err := os.Stat(name); err == nil {
-				pass("project rules", name)
-				foundRule = true
-				break
-			}
-		}
-		if !foundRule {
-			warn("project rules", "no AGENTS.md / CLAUDE.md / .rules found in cwd")
-		}
-
 		// --- Agent integrations ---
 		fmt.Println("\nAgent integrations:")
 		homeDir, _ := os.UserHomeDir()
@@ -232,6 +217,8 @@ var doctorCmd = &cobra.Command{
 			warn("vector search", "not available — run `uniam reindex` after configuring embeddings")
 		}
 
+		// --- Updates ---
+		fmt.Println("\nUpdates:")
 		checker := update.NewChecker(buildinfo.Version)
 		if release, err := checker.Check(context.Background()); err != nil {
 			warn("update check", err.Error())
@@ -267,10 +254,10 @@ func isPathWritable(path string) bool {
 }
 
 type openCodePaths struct {
-	ConfigPath       string
-	SkillPath        string
-	InstructionsPath string
-	PluginPath       string
+	ConfigPath string
+	AgentsPath string
+	SkillPath  string
+	PluginPath string
 }
 
 type integrationStatus struct {
@@ -283,10 +270,10 @@ func newOpenCodePaths(homeDir string) openCodePaths {
 	baseDir := filepath.Join(homeDir, ".config", "opencode")
 
 	return openCodePaths{
-		ConfigPath:       filepath.Join(baseDir, "opencode.json"),
-		SkillPath:        filepath.Join(baseDir, "skills", "uniam", "SKILL.md"),
-		InstructionsPath: filepath.Join(baseDir, "uniam-instructions.md"),
-		PluginPath:       filepath.Join(baseDir, "plugins", "uniam.js"),
+		ConfigPath: filepath.Join(baseDir, "opencode.json"),
+		AgentsPath: filepath.Join(baseDir, "AGENTS.md"),
+		SkillPath:  filepath.Join(baseDir, "skills", "uniam", "SKILL.md"),
+		PluginPath: filepath.Join(baseDir, "plugins", "uniam.js"),
 	}
 }
 
@@ -427,7 +414,7 @@ func checkOpenCodeIntegration(homeDir string) integrationStatus {
 		return integrationStatus{name: "OpenCode", status: "broken", detail: err.Error()}
 	}
 
-	missing := missingPaths([]string{paths.SkillPath, paths.InstructionsPath, paths.PluginPath})
+	missing := missingPaths([]string{paths.AgentsPath, paths.SkillPath, paths.PluginPath})
 	if len(missing) > 0 {
 		return integrationStatus{name: "OpenCode", status: "broken", detail: fmt.Sprintf("config ok, missing %s", strings.Join(missing, ", "))}
 	}

@@ -7,8 +7,5 @@ const (
 	openCodePluginFileName       = "uniam.js"
 )
 
-//go:embed instructions/opencode/uniam-instructions.md
-var openCodeInstructionsContent []byte
-
 //go:embed plugins/opencode/uniam.js
 var openCodePluginContent []byte

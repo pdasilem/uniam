@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -32,14 +33,16 @@ func TestSetupOpenCodeInstallsGlobalAssetsAndIsIdempotent(t *testing.T) {
 	}
 
 	assertOpenCodeManagedFiles(t, target)
-	assertOpenCodeConfigState(t, configPath, "./keep.md", "./uniam-instructions.md", true)
+	assertOpenCodeConfigState(t, configPath, "./keep.md", true)
+	assertOpenCodeAgentsManaged(t, filepath.Join(target, "AGENTS.md"))
 
 	if _, err := setupOpenCode(false, false); err != nil {
 		t.Fatalf("second setupOpenCode() error = %v", err)
 	}
 
 	assertOpenCodeManagedFiles(t, target)
-	assertOpenCodeConfigState(t, configPath, "./keep.md", "./uniam-instructions.md", true)
+	assertOpenCodeConfigState(t, configPath, "./keep.md", true)
+	assertOpenCodeAgentsManaged(t, filepath.Join(target, "AGENTS.md"))
 }
 
 func TestSetupOpenCodeInstallsProjectAssetsAndIsIdempotent(t *testing.T) {
@@ -78,14 +81,16 @@ func TestSetupOpenCodeInstallsProjectAssetsAndIsIdempotent(t *testing.T) {
 	}
 
 	assertOpenCodeManagedFiles(t, target)
-	assertOpenCodeConfigState(t, configPath, "./keep.md", ".opencode/uniam-instructions.md", true)
+	assertOpenCodeConfigState(t, configPath, "./keep.md", true)
+	assertOpenCodeAgentsManaged(t, filepath.Join(repo, "AGENTS.md"))
 
 	if _, err := setupOpenCode(true, false); err != nil {
 		t.Fatalf("second setupOpenCode(true, false) error = %v", err)
 	}
 
 	assertOpenCodeManagedFiles(t, target)
-	assertOpenCodeConfigState(t, configPath, "./keep.md", ".opencode/uniam-instructions.md", true)
+	assertOpenCodeConfigState(t, configPath, "./keep.md", true)
+	assertOpenCodeAgentsManaged(t, filepath.Join(repo, "AGENTS.md"))
 }
 
 func TestUninstallOpenCodeRemovesOnlyUniamManagedAssets(t *testing.T) {
@@ -116,16 +121,18 @@ func TestUninstallOpenCodeRemovesOnlyUniamManagedAssets(t *testing.T) {
 		t.Fatalf("uninstallOpenCode() error = %v", err)
 	}
 
-	assertOpenCodeConfigState(t, configPath, "./keep.md", "./uniam-instructions.md", false)
+	assertOpenCodeConfigState(t, configPath, "./keep.md", false)
 
 	for _, path := range []string{
 		filepath.Join(target, "skills", "uniam", "SKILL.md"),
-		filepath.Join(target, openCodeInstructionsFileName),
 		filepath.Join(target, "plugins", openCodePluginFileName),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected managed asset %q to be removed, stat err = %v", path, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(target, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected managed OpenCode AGENTS.md to be removed, stat err = %v", err)
 	}
 }
 
@@ -190,16 +197,19 @@ func assertOpenCodeManagedFiles(t *testing.T, target string) {
 
 	for _, path := range []string{
 		filepath.Join(target, "skills", "uniam", "SKILL.md"),
-		filepath.Join(target, openCodeInstructionsFileName),
 		filepath.Join(target, "plugins", openCodePluginFileName),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected managed asset %q to exist: %v", path, err)
 		}
 	}
+
+	if _, err := os.Stat(filepath.Join(target, openCodeInstructionsFileName)); !os.IsNotExist(err) {
+		t.Fatalf("expected legacy instructions file to be absent, stat err = %v", err)
+	}
 }
 
-func assertOpenCodeConfigState(t *testing.T, configPath string, keepInstruction string, uniamInstruction string, expectUniam bool) {
+func assertOpenCodeConfigState(t *testing.T, configPath string, keepInstruction string, expectUniam bool) {
 	t.Helper()
 
 	data, err := os.ReadFile(configPath)
@@ -231,10 +241,7 @@ func assertOpenCodeConfigState(t *testing.T, configPath string, keepInstruction 
 		t.Fatalf("config instructions type = %T, want []any", config["instructions"])
 	}
 
-	var (
-		keepCount  int
-		uniamCount int
-	)
+	var keepCount int
 	for _, instruction := range instructions {
 		value, ok := instruction.(string)
 		if !ok {
@@ -244,21 +251,40 @@ func assertOpenCodeConfigState(t *testing.T, configPath string, keepInstruction 
 		if value == keepInstruction {
 			keepCount++
 		}
-		if value == uniamInstruction {
-			uniamCount++
-		}
 	}
 
 	if keepCount != 1 {
 		t.Fatalf("keep instruction count = %d, want 1", keepCount)
 	}
 
-	wantUniamCount := 0
-	if expectUniam {
-		wantUniamCount = 1
+	for _, instruction := range instructions {
+		value := instruction.(string)
+		if value == "./uniam-instructions.md" || value == ".opencode/uniam-instructions.md" {
+			t.Fatalf("legacy OpenCode instruction reference still present: %q", value)
+		}
 	}
-	if uniamCount != wantUniamCount {
-		t.Fatalf("uniam instruction count = %d, want %d", uniamCount, wantUniamCount)
+}
+
+func assertOpenCodeAgentsManaged(t *testing.T, path string) {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile(%q) error = %v", path, err)
+	}
+
+	text := string(data)
+	if !strings.Contains(text, "<!-- uniam:begin opencode -->") {
+		t.Fatalf("OpenCode AGENTS.md missing managed block begin marker in %q", path)
+	}
+	if !strings.Contains(text, "<!-- uniam:end opencode -->") {
+		t.Fatalf("OpenCode AGENTS.md missing managed block end marker in %q", path)
+	}
+	if !strings.Contains(text, "## Uniam") {
+		t.Fatalf("OpenCode AGENTS.md missing Uniam heading in %q", path)
+	}
+	if !strings.Contains(text, "Required:") {
+		t.Fatalf("OpenCode AGENTS.md missing compact Required section in %q", path)
 	}
 }
 
