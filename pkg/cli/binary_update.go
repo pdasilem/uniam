@@ -22,7 +22,7 @@ var binaryUpdateCmd = &cobra.Command{
 		})
 
 		fmt.Println("Preparing update...")
-		result, err := checker.Check(context.Background(), true)
+		result, err := checker.Check(context.Background())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)

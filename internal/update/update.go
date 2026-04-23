@@ -2,24 +2,19 @@ package update
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
-
-	"uniam/internal/config"
 )
 
 const (
 	defaultRepo           = "pdasilem/uniam"
-	defaultCheckTTL       = 24 * time.Hour
 	defaultGitHubEndpoint = "https://api.github.com"
 	defaultHTTPTimeout    = 20 * time.Second
 )
@@ -33,12 +28,6 @@ type Result struct {
 	AssetURL        string
 	CheckedAt       string
 	UpdateAvailable bool
-	Cached          bool
-}
-
-type cacheRecord struct {
-	Result    Result `json:"result"`
-	CheckedAt string `json:"checked_at"`
 }
 
 type githubRelease struct {
@@ -55,22 +44,16 @@ type Checker struct {
 	client         *http.Client
 	repo           string
 	baseURL        string
-	cachePath      string
-	checkTTL       time.Duration
 	currentVersion string
 	progress       func(string)
 }
 
 // NewChecker constructs a release checker for the current installation.
 func NewChecker(currentVersion string) *Checker {
-	home := config.GetUniamHome()
-
 	return &Checker{
 		client:         &http.Client{Timeout: defaultHTTPTimeout},
 		repo:           defaultRepo,
 		baseURL:        defaultGitHubEndpoint,
-		cachePath:      filepath.Join(home, "update-check.json"),
-		checkTTL:       defaultCheckTTL,
 		currentVersion: currentVersion,
 	}
 }
@@ -87,31 +70,14 @@ func (c *Checker) WithBaseURL(baseURL string) *Checker {
 	return c
 }
 
-// WithCheckTTL overrides the cache TTL, mainly for config and tests.
-func (c *Checker) WithCheckTTL(ttl time.Duration) *Checker {
-	if ttl > 0 {
-		c.checkTTL = ttl
-	}
-	return c
-}
-
 // WithProgress installs a callback for user-visible update progress stages.
 func (c *Checker) WithProgress(progress func(string)) *Checker {
 	c.progress = progress
 	return c
 }
 
-// Check returns cached or freshly fetched release information.
-func (c *Checker) Check(ctx context.Context, force bool) (*Result, error) {
-	if !force {
-		c.report("Checking cached release metadata...")
-		if cached, ok := c.loadCache(false); ok {
-			cached.Cached = true
-			c.report("Using cached release metadata.")
-			return cached, nil
-		}
-	}
-
+// Check fetches the latest release information from GitHub.
+func (c *Checker) Check(ctx context.Context) (*Result, error) {
 	c.report("Querying latest release metadata...")
 	result, err := c.fetchLatest(ctx)
 	if err != nil {
@@ -120,16 +86,9 @@ func (c *Checker) Check(ctx context.Context, force bool) (*Result, error) {
 		result, err = c.fetchLatest(ctx)
 	}
 	if err != nil {
-		if cached, ok := c.loadCache(true); ok {
-			cached.Cached = true
-			c.report("Release check failed; using cached metadata.")
-			return cached, nil
-		}
-
-		return nil, fmt.Errorf("release check failed and no cached metadata is available yet: %w", err)
+		return nil, fmt.Errorf("release check failed: %w", err)
 	}
 
-	_ = c.storeCache(result)
 	c.report("Release metadata loaded.")
 
 	return result, nil
@@ -202,57 +161,9 @@ func (c *Checker) Apply(ctx context.Context, result *Result) error {
 		return fmt.Errorf("failed to replace current binary: %w", err)
 	}
 
-	_ = os.Remove(c.cachePath)
 	c.report("Update applied successfully.")
 
 	return nil
-}
-
-func (c *Checker) loadCache(ignoreTTL bool) (*Result, bool) {
-	data, err := os.ReadFile(c.cachePath)
-	if err != nil {
-		return nil, false
-	}
-
-	var cache cacheRecord
-	if err := json.Unmarshal(data, &cache); err != nil {
-		return nil, false
-	}
-
-	checkedAt, err := time.Parse(time.RFC3339, cache.CheckedAt)
-	if err != nil {
-		return nil, false
-	}
-
-	if cache.Result.CurrentVersion != "" && c.currentVersion != "" && cache.Result.CurrentVersion != c.currentVersion {
-		return nil, false
-	}
-
-	if !ignoreTTL && time.Since(checkedAt) > c.checkTTL {
-		return nil, false
-	}
-
-	cache.Result.Cached = true
-
-	return &cache.Result, true
-}
-
-func (c *Checker) storeCache(result *Result) error {
-	if err := os.MkdirAll(filepath.Dir(c.cachePath), 0755); err != nil {
-		return err
-	}
-
-	record := cacheRecord{
-		Result:    *result,
-		CheckedAt: result.CheckedAt,
-	}
-
-	data, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(c.cachePath, data, 0644)
 }
 
 func (c *Checker) fetchLatest(ctx context.Context) (*Result, error) {

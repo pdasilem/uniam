@@ -2,13 +2,10 @@ package update
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -51,9 +48,8 @@ func TestCheckFetchesLatestRelease(t *testing.T) {
 	}
 
 	checker := NewChecker("1.2.0").WithHTTPClient(client).WithBaseURL("https://example.invalid")
-	checker.cachePath = t.TempDir() + "/update-cache.json"
 
-	result, err := checker.Check(context.Background(), true)
+	result, err := checker.Check(context.Background())
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
 	}
@@ -67,31 +63,11 @@ func TestCheckFetchesLatestRelease(t *testing.T) {
 	}
 }
 
-func TestCheckInvalidatesCacheWhenCurrentVersionChanges(t *testing.T) {
-	cachePath := t.TempDir() + "/update-cache.json"
-	cached := cacheRecord{
-		Result: Result{
-			CurrentVersion:  "1.2.0",
-			LatestVersion:   "v1.3.0",
-			PublishedAt:     "2026-04-22T10:00:00Z",
-			AssetName:       assetNameForCurrentPlatform(),
-			AssetURL:        "https://example.invalid/old",
-			CheckedAt:       time.Now().UTC().Format(time.RFC3339),
-			UpdateAvailable: true,
-		},
-		CheckedAt: time.Now().UTC().Format(time.RFC3339),
-	}
-
-	data, err := json.Marshal(cached)
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	if err := os.WriteFile(cachePath, data, 0644); err != nil {
-		t.Fatalf("os.WriteFile() error = %v", err)
-	}
-
+func TestCheckRefreshesLatestReleaseEveryTime(t *testing.T) {
+	attempts := 0
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
 			body := `{
 				"tag_name":"v1.4.0",
 				"published_at":"2026-04-22T11:00:00Z",
@@ -109,15 +85,14 @@ func TestCheckInvalidatesCacheWhenCurrentVersionChanges(t *testing.T) {
 	}
 
 	checker := NewChecker("1.3.0").WithHTTPClient(client).WithBaseURL("https://example.invalid")
-	checker.cachePath = cachePath
 
-	result, err := checker.Check(context.Background(), false)
+	result, err := checker.Check(context.Background())
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
 	}
 
-	if result.Cached {
-		t.Fatal("expected stale version cache to be ignored")
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 	if result.CurrentVersion != "1.3.0" {
 		t.Fatalf("CurrentVersion = %q, want %q", result.CurrentVersion, "1.3.0")
@@ -127,29 +102,7 @@ func TestCheckInvalidatesCacheWhenCurrentVersionChanges(t *testing.T) {
 	}
 }
 
-func TestCheckFallsBackToCachedResultOnFetchError(t *testing.T) {
-	cachePath := t.TempDir() + "/update-cache.json"
-	cached := cacheRecord{
-		Result: Result{
-			CurrentVersion:  "1.3.0",
-			LatestVersion:   "v1.4.0",
-			PublishedAt:     "2026-04-22T11:00:00Z",
-			AssetName:       assetNameForCurrentPlatform(),
-			AssetURL:        "https://example.invalid/cached",
-			CheckedAt:       time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339),
-			UpdateAvailable: true,
-		},
-		CheckedAt: time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339),
-	}
-
-	data, err := json.Marshal(cached)
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	if err := os.WriteFile(cachePath, data, 0644); err != nil {
-		t.Fatalf("os.WriteFile() error = %v", err)
-	}
-
+func TestCheckReturnsErrorWhenFetchFails(t *testing.T) {
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			return nil, context.DeadlineExceeded
@@ -157,40 +110,15 @@ func TestCheckFallsBackToCachedResultOnFetchError(t *testing.T) {
 	}
 
 	checker := NewChecker("1.3.0").WithHTTPClient(client).WithBaseURL("https://example.invalid")
-	checker.cachePath = cachePath
-	checker.checkTTL = time.Hour
 
-	result, err := checker.Check(context.Background(), false)
-	if err != nil {
-		t.Fatalf("Check() error = %v", err)
-	}
-
-	if !result.Cached {
-		t.Fatal("expected cached fallback result")
-	}
-	if result.LatestVersion != "v1.4.0" {
-		t.Fatalf("LatestVersion = %q, want %q", result.LatestVersion, "v1.4.0")
-	}
-}
-
-func TestCheckReturnsHelpfulErrorWhenFetchFailsWithoutCache(t *testing.T) {
-	client := &http.Client{
-		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			return nil, context.DeadlineExceeded
-		}),
-	}
-
-	checker := NewChecker("1.3.0").WithHTTPClient(client).WithBaseURL("https://example.invalid")
-	checker.cachePath = t.TempDir() + "/update-cache.json"
-
-	_, err := checker.Check(context.Background(), false)
+	_, err := checker.Check(context.Background())
 	if err == nil {
-		t.Fatal("Check() error = nil, want helpful no-cache error")
+		t.Fatal("Check() error = nil, want release check failure")
 	}
 
 	msg := err.Error()
-	if !strings.Contains(msg, "no cached metadata is available yet") {
-		t.Fatalf("Check() error = %q, want no-cache guidance", msg)
+	if !strings.Contains(msg, "release check failed") {
+		t.Fatalf("Check() error = %q, want release failure prefix", msg)
 	}
 }
 
@@ -223,9 +151,8 @@ func TestCheckRetriesOnceBeforeSucceeding(t *testing.T) {
 	checker := NewChecker("1.3.0").WithHTTPClient(client).WithBaseURL("https://example.invalid").WithProgress(func(message string) {
 		messages = append(messages, message)
 	})
-	checker.cachePath = t.TempDir() + "/update-cache.json"
 
-	result, err := checker.Check(context.Background(), false)
+	result, err := checker.Check(context.Background())
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
 	}

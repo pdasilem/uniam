@@ -47,8 +47,8 @@ func RunServer() error {
 
 	cfg := svc.Config()
 	if cfg.Updates.CheckOnMCPStart {
-		checker := update.NewChecker(buildinfo.Version).WithCheckTTL(time.Duration(cfg.Updates.CheckIntervalHours) * time.Hour)
-		if result, checkErr := checker.Check(context.Background(), false); checkErr == nil {
+		checker := update.NewChecker(buildinfo.Version)
+		if result, checkErr := checker.Check(context.Background()); checkErr == nil {
 			if result.UpdateAvailable {
 				if cfg.Updates.AutoApply && runtime.GOOS != "windows" {
 					if applyErr := checker.Apply(context.Background(), result); applyErr == nil {

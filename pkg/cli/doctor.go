@@ -233,7 +233,7 @@ var doctorCmd = &cobra.Command{
 		}
 
 		checker := update.NewChecker(buildinfo.Version)
-		if release, err := checker.Check(context.Background(), false); err != nil {
+		if release, err := checker.Check(context.Background()); err != nil {
 			warn("update check", err.Error())
 		} else if release.UpdateAvailable {
 			warn("update available", fmt.Sprintf("%s -> %s", release.CurrentVersion, release.LatestVersion))

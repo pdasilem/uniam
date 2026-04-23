@@ -11,8 +11,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var checkUpdateForce bool
-
 var checkUpdateCmd = &cobra.Command{
 	Use:   "check-update",
 	Short: "Check GitHub Releases for a newer uniam version",
@@ -22,7 +20,7 @@ var checkUpdateCmd = &cobra.Command{
 		})
 
 		fmt.Println("Preparing release check...")
-		result, err := checker.Check(context.Background(), checkUpdateForce)
+		result, err := checker.Check(context.Background())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -33,7 +31,6 @@ var checkUpdateCmd = &cobra.Command{
 		if result.PublishedAt != "" {
 			fmt.Printf("Published at:    %s\n", result.PublishedAt)
 		}
-		fmt.Printf("Cached:          %t\n", result.Cached)
 
 		if result.UpdateAvailable {
 			fmt.Printf("Update available: yes\n")
@@ -44,8 +41,4 @@ var checkUpdateCmd = &cobra.Command{
 			fmt.Printf("Update available: no\n")
 		}
 	},
-}
-
-func init() {
-	checkUpdateCmd.Flags().BoolVar(&checkUpdateForce, "force", false, "Ignore cached release metadata and fetch fresh data")
 }
